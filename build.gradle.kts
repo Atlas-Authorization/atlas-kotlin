@@ -62,14 +62,14 @@ dependencies {
 
 // Maven coordinate: net.atlasauth:atlas-android
 group = "net.atlasauth"
-version = "0.1.0"
+version = "0.2.0"
 
 publishing {
     publications {
         register<MavenPublication>("release") {
             groupId = "net.atlasauth"
             artifactId = "atlas-android"
-            version = "0.1.0"
+            version = "0.2.0"
             afterEvaluate {
                 from(components["release"])
             }

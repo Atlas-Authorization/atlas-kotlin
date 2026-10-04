@@ -111,6 +111,25 @@ Models mirror `Models.swift`: `SignInAttempt`, `SessionTokens`, `AtlasUser`,
 `EmailAddress`, `ExternalAccount`, `Passkey`, `AtlasSession`, plus the `JsonValue`
 type for arbitrary `public_metadata` / `unsafe_metadata`.
 
+### Native session (first-party OAuth, cookie-free)
+
+New in **0.2.0** (`NativeSession.kt`). A first-party app trades an OAuth access
+token it already holds for a real Atlas session and carries it by hand as a
+bearer — no cookie jar needed:
+
+- `exchangeForSession(baseUrl, clientId, accessToken, httpClient)` — RFC 8693
+  token-exchange against `POST /oauth2/token`.
+- `refreshNativeSession(baseUrl, publishableKey, sessionId, refreshToken, httpClient)`
+  — rotate without a cookie via `POST /v1/client/sessions/:id/tokens`.
+- `NativeSessionManager` — holds the session, hands out a fresh bearer via
+  `token()` / `authHeaders()` (lazy, single-flight refresh ~10s before expiry via
+  a `Mutex`), and persists each rotated refresh token to the `TokenStore`.
+  `NativeSessionManager.create(context, publishableKey, frontendApi, clientId)`
+  wires the `EncryptedSharedPreferencesTokenStore`.
+
+Both `suspend` helpers **fail soft**, returning `null` on any error — the
+caller's cue to re-run OAuth.
+
 ## Token storage
 
 `TokenStore` is an interface, so persistence is yours to choose:
