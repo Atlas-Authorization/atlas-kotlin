@@ -19,7 +19,7 @@ plugins {
 // SDK). Distinct from the Android-library SDK net.atlasauth:atlas-android (sdks/kotlin),
 // which carries the native passkey ceremony.
 group = "net.atlasauth"
-version = "0.3.0"
+version = "0.4.0"
 
 repositories {
     mavenCentral()
@@ -55,7 +55,7 @@ tasks.test {
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     signAllPublications()
-    coordinates("net.atlasauth", "atlas-kotlin", "0.3.0")
+    coordinates("net.atlasauth", "atlas-kotlin", "0.4.0")
     pom {
         name.set("Atlas Kotlin SDK")
         description.set(

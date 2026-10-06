@@ -10,23 +10,20 @@ vanilla JS client (`@atlas/js`) endpoint-for-endpoint and shape-for-shape.
 Gradle (Kotlin DSL). Publishes as [`net.atlasauth:atlas-kotlin`](https://central.sonatype.com/artifact/net.atlasauth/atlas-kotlin):
 
 ```kotlin
-implementation("net.atlasauth:atlas-kotlin:0.3.0")
+implementation("net.atlasauth:atlas-kotlin:0.4.0")
 ```
 
-For a native **Android** app that needs the passkey ceremony, use the
-Android-library SDK [`net.atlasauth:atlas-android`](https://central.sonatype.com/artifact/net.atlasauth/atlas-android) instead (source in `sdks/kotlin`).
+For a native **Android** app that needs on-device UI or the native token
+ceremonies, use the Android-library SDK
+[`net.atlasauth:atlas-android`](https://central.sonatype.com/artifact/net.atlasauth/atlas-android) instead (source in `sdks/kotlin`).
 
-> **Scope.** This is a solid, tested *foundation*: the client-facing auth core an
-> Android app needs. It is not yet a complete SDK — see [Scope](#scope) for what a
-> full release still needs (prebuilt UI, the multi-step MFA driver).
-
-> **Passkeys live elsewhere.** This module is deliberately a plain Kotlin/JVM
-> library that builds and unit-tests with no Android SDK (see
-> [Design](#design-dependency-light-on-purpose)). A native passkey ceremony needs
-> the Android-only Jetpack Credential Manager and an `Activity`, which cannot run
-> in a plain-JVM module. Passkey register + sign-in ship in the Android-library
-> SDK `net.atlasauth:atlas-android` (`sdks/kotlin`) via its `PasskeyManager` — use
-> that SDK if you need passkeys.
+> **Scope.** The client surface is **complete for a pure-JVM library**: the full
+> multi-step sign-in / sign-up / password-reset [flow driver](#flow-driver), the
+> [native id_token exchange](#native--one-tap-idtoken), and the
+> [organizations, session listing, and `/me` mutation](#surface) surface — all
+> tested offline, with no Android SDK. What is left out is precisely what a
+> plain-JVM module *cannot* host: on-device UI and native token ceremonies. Those
+> live in the Android SDK — see [What lives in the Android SDK](#what-lives-in-the-android-sdk).
 
 ## Design: dependency-light on purpose
 
@@ -77,14 +74,77 @@ val ticket  = uri.getQueryParameter("__atlas_ticket")
 if (attempt != null && ticket != null) atlas.exchangeTicket(attempt, ticket)
 ```
 
+## Flow driver
+
+`signIn(email, password)` is the single-shot happy path and still works. For
+everything else — email/phone codes, a second factor, MFA enrollment,
+password reset — use the suspend-based flow driver, which mirrors the vanilla JS
+client (`@atlas/js`'s `nextStep` / `advance`): you read `status`, the driver
+tells you the next `step`, and you call the matching `advance` method. It never
+picks the step itself (§5), and an unknown status maps to `SignInStep.Unknown`
+rather than a blank screen.
+
+```kotlin
+val flow = atlas.beginSignIn("ada@example.com")
+when (val step = flow.step) {
+    is SignInStep.CollectFirstFactor -> {
+        // step.strategies is the server's list — never filter it client-side.
+        flow.attemptPassword("…")              // or prepareFirstFactor("email_code") + attemptEmailCode(code)
+    }
+    else -> { /* … */ }
+}
+if (flow.step is SignInStep.CollectSecondFactor) {
+    flow.prepareSecondFactor("sms")            // sms / push / passkey options
+    flow.attemptSecondFactor("123456")         // TOTP, SMS OTP, or a backup code
+}
+if (flow.isComplete) {
+    val user = flow.complete()                 // exchanges the ticket + persists the session
+}
+```
+
+| Flow | Entry | Steps |
+| --- | --- | --- |
+| Sign-in | `atlas.beginSignIn(identifier)` → `SignInFlow` | `attemptPassword` · `prepareFirstFactor`/`attemptEmailCode`/`attemptPhoneCode` · `prepareSecondFactor`/`attemptSecondFactor`/`attemptPushSecondFactor` · `prepareMfaEnrollment`/`attemptMfaEnrollment` · `complete` |
+| Sign-up | `atlas.beginSignUp(email, password, …)` → `SignUpFlow` | `prepareVerification` · `attemptVerification` · `complete` |
+| Password reset | `atlas.beginPasswordReset(email)` → `PasswordResetFlow` | `attemptVerification` · `attemptSecondFactor` · `setNewPassword` · `complete` |
+
+`complete()` exchanges the one-time ticket and persists the session via the
+`TokenStore`. `nextStep(attempt)` and `isTerminal(attempt)` are exposed as pure
+functions too, for a UI that wants to map status itself.
+
+## Native / One-Tap (id_token)
+
+A native sign-in (Google One-Tap, Apple, Facebook Limited Login) produces a
+provider **id_token**. This library does **no native ceremony** — the app
+obtains the token string however it likes (the Android SDK, below) and hands it
+over:
+
+```kotlin
+val nonce = atlas.mintNativeNonce("google")           // optional replay-binding nonce
+// … native layer obtains an id_token bound to `nonce` …
+val flow = atlas.signInWithIdToken("google", idToken, nonce)
+val user = if (flow.isComplete) flow.complete()        // or resume a second factor on `flow`
+           else error("second factor owed: ${flow.step}")
+```
+
 ## Surface
 
 | Method | FAPI endpoint(s) |
 | --- | --- |
 | `signIn(email, password)` | `POST /v1/client/sign_ins` → `…/attempt_first_factor` → `POST /v1/client/tickets/exchange` |
+| `beginSignIn` / `beginSignUp` / `beginPasswordReset` | the flow driver (see above) |
+| `mintNativeNonce(provider)` | `POST /v1/client/sign_ins/id_token/nonce` |
+| `signInWithIdToken(provider, idToken, nonce?)` | `POST /v1/client/sign_ins/id_token` |
 | `oauthAuthorizeUrl(provider, redirectUri)` | `POST /v1/client/sign_ins/oauth` |
 | `exchangeTicket(attemptId, ticket)` | `POST /v1/client/tickets/exchange` |
 | `currentUser()` | `GET /v1/client/me` |
+| `updateProfile(…)` | `PATCH /v1/client/me` (writes `unsafe_metadata` only — §4.1) |
+| `addEmailAddress` / `verifyEmailAddress` / `setPrimaryEmail` / `deleteEmailAddress` | `/v1/client/me/email_addresses[/:id[/…]]` |
+| `connectExternalAccount` / `deleteExternalAccount` | `/v1/client/me/external_accounts/connect`, `DELETE …/:id` |
+| `changePassword` / `setPassword` | `POST /v1/client/me/change_password`, `…/set_password` |
+| `organizationMemberships()` | `GET /v1/client/me/organizations` |
+| `createOrganization(name, slug)` / `organization(id)` | `/v1/client/organizations[/:id]` |
+| `sessions()` / `revokeSession(id)` / `revokeOtherSessions()` | `GET /v1/client/sessions`, `…/:id/revoke`, `…/revoke_all` |
 | `refresh()` | `POST /v1/client/sessions/:id/tokens` |
 | `signOut()` | `POST /v1/client/sessions/:id/revoke` |
 
@@ -143,26 +203,41 @@ try {
 gradle test        # or ./gradlew test once a wrapper is added
 ```
 
-12 unit tests run entirely offline against a `FakeTransport` — no network, no
-MockWebServer. They pin: the auth header + base URL on every request; that
-password sign-in walks the exact three endpoints with the exact bodies and stores
-the returned JWT + refresh cookie; that a 4xx/5xx becomes an `AtlasError` with the
-right `code`; that `currentUser()` parses the full `/me` shape and presents the
-cookie; that `refresh()` rotates the stored token; and both token-store round
+The unit tests run entirely offline against a `FakeTransport` — no network, no
+MockWebServer, no emulator. They pin: the auth header + base URL on every
+request; the exhaustive `nextStep` status mapping (including the unknown-status
+fallback); the sign-in / sign-up / password-reset flow driver walking its exact
+endpoints and bodies through to a persisted session; the id_token exchange body
+and its complete / needs-second-factor outcomes; the organizations, session
+listing and `/me` mutation surface (request shapes + response mapping); the JSON
+writer (nested objects, arrays, null-omission, whole-number rendering); that a
+4xx/5xx becomes an `AtlasError` with the right `code`; and both token-store round
 trips (in-memory and the EncryptedSharedPreferences-shaped store).
 
 Built as a plain Kotlin/JVM library. To ship it inside an Android app, add the
 `com.android.library` plugin, the `androidx.security:security-crypto` dependency,
 and (optionally) a Gradle wrapper.
 
-## Scope
+## What lives in the Android SDK
 
-A complete native SDK on top of this foundation would add:
+This module is deliberately a plain Kotlin/JVM library that builds and
+unit-tests with **no Android SDK** (see
+[Design](#design-dependency-light-on-purpose)). Three things therefore cannot
+live here — they need the Android runtime (an `Activity`, Jetpack Credential
+Manager, Google Identity Services) — and ship in the Android-library SDK
+[`net.atlasauth:atlas-android`](https://central.sonatype.com/artifact/net.atlasauth/atlas-android) (`sdks/kotlin`):
 
-- **A multi-step flow driver** mirroring `@atlas/js`'s `nextStep` / `advance` —
-  email-code, second factor, MFA enrollment, password reset — instead of the
-  single password happy-path here.
-- **Prebuilt Compose components** (`SignIn` / `UserButton` equivalents) and an
+- **Prebuilt Compose UI** (`SignIn` / `UserButton` equivalents) and an
   observable session holder for reactive UI.
-- **Native Google / One-Tap** token exchange (`POST /v1/client/sign_ins/id_token`).
-- Organizations, session listing, and the `/me` mutation surface.
+- **Native token acquisition** — the Credential Manager / Google One-Tap
+  ceremony that *produces* the provider `id_token`. This library *exchanges* an
+  id_token string ([`signInWithIdToken`](#native--one-tap-idtoken)); obtaining it
+  is the Android SDK's job (or the platform's).
+- **The passkey ceremony** — WebAuthn register + sign-in via Credential Manager.
+  This library returns the server's challenge options
+  (`prepareSecondFactor` → `SecondFactorChallenge.raw`); turning them into a
+  platform assertion is native.
+
+Everything else a client needs — the full multi-step flow driver, id_token
+exchange, organizations, session listing, and the `/me` mutation surface — is
+here and tested.

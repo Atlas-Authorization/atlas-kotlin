@@ -84,7 +84,7 @@ class AtlasClient(
         val response = send(
             "POST",
             "/v1/client/tickets/exchange",
-            mapOf("attempt_id" to attemptId, "ticket" to ticket),
+            encodeJsonObject(mapOf("attempt_id" to attemptId, "ticket" to ticket)),
             cookie = null,
         )
         throwIfError(response)
@@ -173,32 +173,341 @@ class AtlasClient(
     /** Whether a session is persisted — a cheap offline check, not a server validation. */
     fun hasSession(): Boolean = tokenStore.load() != null
 
+    // ---- multi-step flow driver ----------------------------------------------
+
+    /**
+     * Begin a multi-step sign-in (§5). Creates the attempt and returns a
+     * [SignInFlow] whose [SignInFlow.step] says what the server demands next —
+     * password, an email/phone code, a second factor, MFA enrollment. Drive it to
+     * [SignInStep.Done] then call [SignInFlow.complete] to persist the session.
+     *
+     * This is the general counterpart to the single-shot [signIn] happy path,
+     * which still works unchanged.
+     */
+    suspend fun beginSignIn(identifier: String, captchaToken: String? = null): SignInFlow {
+        val attempt = SignInAttempt.from(
+            clientRequest(
+                "POST",
+                "/v1/client/sign_ins",
+                jsonBody("identifier" to jstr(identifier), "captcha_token" to jstr(captchaToken)),
+            ),
+        )
+        return SignInFlow(this, attempt)
+    }
+
+    /**
+     * Begin a multi-step sign-up (§5.1). Creates the attempt with an email +
+     * password and returns a [SignUpFlow]; verify the email with a code, then
+     * [SignUpFlow.complete] to persist the session.
+     */
+    suspend fun beginSignUp(
+        email: String,
+        password: String,
+        fields: Map<String, String>? = null,
+        captchaToken: String? = null,
+        consent: Boolean? = null,
+        organizationId: String? = null,
+    ): SignUpFlow {
+        val fieldsJson = fields?.let { JsonValue.Obj(it.mapValues { (_, v) -> JsonValue.Str(v) }) }
+        val attempt = SignUpAttempt.from(
+            clientRequest(
+                "POST",
+                "/v1/client/sign_ups",
+                jsonBody(
+                    "email" to jstr(email),
+                    "password" to jstr(password),
+                    "captcha_token" to jstr(captchaToken),
+                    "consent" to jbool(consent),
+                    "organization_id" to jstr(organizationId),
+                    "fields" to fieldsJson,
+                ),
+            ),
+        )
+        return SignUpFlow(this, attempt)
+    }
+
+    /** Begin a password reset (§5.4). See [PasswordResetFlow]. */
+    suspend fun beginPasswordReset(email: String, captchaToken: String? = null): PasswordResetFlow {
+        val attempt = SignInAttempt.from(
+            clientRequest(
+                "POST",
+                "/v1/client/password_resets",
+                jsonBody("email_address" to jstr(email), "captcha_token" to jstr(captchaToken)),
+            ),
+        )
+        return PasswordResetFlow(this, attempt)
+    }
+
+    // ---- native / One-Tap id_token -------------------------------------------
+
+    /**
+     * Mint a single-use, replay-binding nonce for a native id_token sign-in
+     * (`POST /v1/client/sign_ins/id_token/nonce`). The native layer (the Android
+     * SDK / platform) hands this nonce to the provider SDK (e.g. Google GSI
+     * `initialize({ nonce })`) so the returned id_token is bound to it.
+     */
+    suspend fun mintNativeNonce(provider: String): String {
+        val json = clientRequest(
+            "POST",
+            "/v1/client/sign_ins/id_token/nonce",
+            jsonBody("provider" to jstr(provider)),
+        )
+        return json.string("nonce")
+            ?: throw AtlasException(AtlasError.Decoding("The server returned no nonce."))
+    }
+
+    /**
+     * Exchange a provider **id_token string** for a session
+     * (`POST /v1/client/sign_ins/id_token`).
+     *
+     * This library performs **no native token ceremony** — the app obtains the
+     * id_token however it likes (the Android SDK `net.atlasauth:atlas-android`
+     * via Credential Manager / Google One-Tap, Apple, Facebook Limited Login, …)
+     * and passes the resulting string here. An optional [nonce] from
+     * [mintNativeNonce] replay-binds it.
+     *
+     * Returns a [SignInFlow] positioned at the resulting attempt: when the token
+     * alone signs the user in, [SignInFlow.step] is [SignInStep.Done] and
+     * [SignInFlow.complete] persists the session; when the instance demands a
+     * second factor, the flow is at [SignInStep.CollectSecondFactor] and the
+     * usual `prepare`/`attempt`-second-factor methods finish it.
+     */
+    suspend fun signInWithIdToken(provider: String, idToken: String, nonce: String? = null): SignInFlow {
+        val attempt = SignInAttempt.from(
+            clientRequest(
+                "POST",
+                "/v1/client/sign_ins/id_token",
+                jsonBody(
+                    "provider" to jstr(provider),
+                    "id_token" to jstr(idToken),
+                    "nonce" to jstr(nonce),
+                ),
+            ),
+        )
+        return SignInFlow(this, attempt)
+    }
+
+    // ---- organizations --------------------------------------------------------
+
+    /**
+     * The organizations the signed-in user belongs to with their role
+     * (`GET /v1/client/me/organizations`).
+     */
+    suspend fun organizationMemberships(): List<OrganizationMembership> {
+        val json = authedRequest("GET", "/v1/client/me/organizations", null)
+        return json.arr("data")?.items?.map { OrganizationMembership.from(it) } ?: emptyList()
+    }
+
+    /**
+     * Create an organization (`POST /v1/client/organizations`). Only succeeds when
+     * the instance allows user-created organizations; otherwise the server
+     * answers 403 and this throws an [AtlasError.Api] with `forbidden`.
+     */
+    suspend fun createOrganization(name: String, slug: String): Organization {
+        val json = authedRequest(
+            "POST",
+            "/v1/client/organizations",
+            jsonBody("name" to jstr(name), "slug" to jstr(slug)),
+        )
+        return Organization.from(json)
+    }
+
+    /**
+     * Read one organization (`GET /v1/client/organizations/:id`). Resolves against
+     * the session's ACTIVE organization — reading one the session is not acting
+     * inside answers 404 (see the server's active-org model).
+     */
+    suspend fun organization(id: String): Organization =
+        Organization.from(authedRequest("GET", "/v1/client/organizations/$id", null))
+
+    // ---- sessions / devices ---------------------------------------------------
+
+    /**
+     * The signed-in user's own active sessions/devices
+     * (`GET /v1/client/sessions`). The list is scoped to the session the stored
+     * refresh cookie resolves to — never to a user id in the request.
+     */
+    suspend fun sessions(): List<SessionDevice> {
+        val json = authedRequest("GET", "/v1/client/sessions", null)
+        return json.arr("data")?.items?.map { SessionDevice.from(it) } ?: emptyList()
+    }
+
+    /** Sign out one device by session id (`POST /v1/client/sessions/:id/revoke`). */
+    suspend fun revokeSession(sessionId: String) {
+        authedRequest("POST", "/v1/client/sessions/$sessionId/revoke", null)
+    }
+
+    /**
+     * Sign out of every OTHER device (`POST /v1/client/sessions/revoke_all`); the
+     * current session is spared. Returns the number of sessions revoked.
+     */
+    suspend fun revokeOtherSessions(): Int {
+        val json = authedRequest("POST", "/v1/client/sessions/revoke_all", null)
+        return json.number("sessions_revoked")?.toInt() ?: 0
+    }
+
+    // ---- /me mutations --------------------------------------------------------
+
+    /**
+     * Patch the signed-in user's profile (`PATCH /v1/client/me`). Only the fields
+     * passed are sent. `unsafeMetadata` is the only metadata the frontend may
+     * write (§4.1) — `public_metadata`/`private_metadata` are backend-only and the
+     * server refuses them.
+     */
+    suspend fun updateProfile(
+        firstName: String? = null,
+        lastName: String? = null,
+        username: String? = null,
+        locale: String? = null,
+        unsafeMetadata: JsonValue? = null,
+    ): AtlasUser {
+        val json = authedRequest(
+            "PATCH",
+            "/v1/client/me",
+            jsonBody(
+                "first_name" to jstr(firstName),
+                "last_name" to jstr(lastName),
+                "username" to jstr(username),
+                "locale" to jstr(locale),
+                "unsafe_metadata" to unsafeMetadata,
+            ),
+        )
+        return AtlasUser.from(json)
+    }
+
+    /** Add an email address (`POST /v1/client/me/email_addresses`); it starts unverified. */
+    suspend fun addEmailAddress(email: String): EmailAddress {
+        val json = authedRequest(
+            "POST",
+            "/v1/client/me/email_addresses",
+            jsonBody("email_address" to jstr(email)),
+        )
+        return EmailAddress.from(json)
+    }
+
+    /** Verify an added address with its emailed code (`…/email_addresses/:id/attempt_verification`). */
+    suspend fun verifyEmailAddress(emailId: String, code: String): EmailAddress {
+        val json = authedRequest(
+            "POST",
+            "/v1/client/me/email_addresses/$emailId/attempt_verification",
+            jsonBody("code" to jstr(code)),
+        )
+        return EmailAddress.from(json)
+    }
+
+    /** Make a VERIFIED address the primary one (`…/email_addresses/:id/primary`). */
+    suspend fun setPrimaryEmail(emailId: String) {
+        authedRequest("POST", "/v1/client/me/email_addresses/$emailId/primary", null)
+    }
+
+    /** Remove an email address (`DELETE /v1/client/me/email_addresses/:id`). */
+    suspend fun deleteEmailAddress(emailId: String) {
+        authedRequest("DELETE", "/v1/client/me/email_addresses/$emailId", null)
+    }
+
+    /**
+     * Start an OAuth flow to connect a NEW provider to the signed-in user
+     * (`POST /v1/client/me/external_accounts/connect`). Returns the provider
+     * `authorization_url` to open in a browser/Custom Tab; the callback returns to
+     * [redirectUrl] with `__atlas_status=connected`.
+     */
+    suspend fun connectExternalAccount(
+        provider: String,
+        redirectUrl: String,
+        additionalScopes: List<String>? = null,
+    ): String {
+        val json = authedRequest(
+            "POST",
+            "/v1/client/me/external_accounts/connect",
+            jsonBody(
+                "provider" to jstr(provider),
+                "redirect_url" to jstr(redirectUrl),
+                "additional_scopes" to jarr(additionalScopes),
+            ),
+        )
+        return json.string("authorization_url")
+            ?: throw AtlasException(AtlasError.Decoding("The server returned no authorization_url."))
+    }
+
+    /** Unlink a connected provider (`DELETE /v1/client/me/external_accounts/:id`). */
+    suspend fun deleteExternalAccount(externalAccountId: String) {
+        authedRequest("DELETE", "/v1/client/me/external_accounts/$externalAccountId", null)
+    }
+
+    /**
+     * Change the password of a signed-in account (`POST /v1/client/me/change_password`),
+     * proving the current one. Returns the number of other sessions revoked.
+     */
+    suspend fun changePassword(currentPassword: String, newPassword: String): Int {
+        val json = authedRequest(
+            "POST",
+            "/v1/client/me/change_password",
+            jsonBody(
+                "current_password" to jstr(currentPassword),
+                "new_password" to jstr(newPassword),
+            ),
+        )
+        return json.number("sessions_revoked")?.toInt() ?: 0
+    }
+
+    /**
+     * Set a FIRST password on an account that has none — an OAuth-only or guest
+     * account (`POST /v1/client/me/set_password`). Use [changePassword] when the
+     * account already has one.
+     */
+    suspend fun setPassword(password: String) {
+        authedRequest("POST", "/v1/client/me/set_password", jsonBody("password" to jstr(password)))
+    }
+
     // ---- HTTP core -----------------------------------------------------------
 
     private suspend fun postJson(path: String, body: Map<String, String>): JsonValue {
-        val response = send("POST", path, body, cookie = null)
+        val response = send("POST", path, encodeJsonObject(body), cookie = null)
         throwIfError(response)
         return JsonValue.parse(response.body)
     }
 
     /**
+     * A publishable-key-only request (no session) used by the pre-session flow
+     * driver: builds the attempt body with [jsonBody], sends it, throws on a
+     * non-2xx, and parses the JSON body. `bodyJson` is null for a bodyless POST.
+     */
+    internal suspend fun clientRequest(method: String, path: String, bodyJson: String?): JsonValue {
+        val response = send(method, path, bodyJson, cookie = null)
+        throwIfError(response)
+        return JsonValue.parse(response.body)
+    }
+
+    /**
+     * An authenticated `/v1/client/me|organizations|sessions` request: presents
+     * the stored session cookie (the same replay [currentUser] uses), throws
+     * [AtlasError.NotSignedIn] when there is no session, throws on a non-2xx, and
+     * parses the JSON body. A bodyless response (an empty 200) parses as an empty
+     * object so a caller never crashes on "" .
+     */
+    internal suspend fun authedRequest(method: String, path: String, bodyJson: String?): JsonValue {
+        val stored = tokenStore.load() ?: throw AtlasException(AtlasError.NotSignedIn)
+        val response = send(method, path, bodyJson, cookie = cookieHeader(stored))
+        throwIfError(response)
+        return if (response.body.isBlank()) JsonValue.Obj(emptyMap()) else JsonValue.parse(response.body)
+    }
+
+    /**
      * The single place a request is built and sent, so the auth header, base URL,
-     * and JSON content type are set in exactly one place.
+     * and JSON content type are set in exactly one place. `body` is a pre-encoded
+     * JSON string (or null for a bodyless request).
      */
     private suspend fun send(
         method: String,
         path: String,
-        body: Map<String, String>?,
+        body: String?,
         cookie: String?,
     ): HttpResponse = withContext(dispatcher) {
         val headers = LinkedHashMap<String, String>()
         headers["x-publishable-key"] = publishableKey
         if (cookie != null) headers["Cookie"] = cookie
-        val encoded = body?.let {
-            headers["content-type"] = "application/json"
-            encodeJsonObject(it)
-        }
-        transport.execute(HttpRequest(method, baseUrl + path, headers, encoded))
+        if (body != null) headers["content-type"] = "application/json"
+        transport.execute(HttpRequest(method, baseUrl + path, headers, body))
     }
 
     private fun throwIfError(response: HttpResponse) {

@@ -8,9 +8,13 @@ package com.atlas.sdk
 data class SignInAttempt(
     val id: String,
     val status: String,
+    /** The identifier the attempt was started with; null before one is collected. */
+    val identifier: String?,
     /** The server's first-factor strategy list; never filtered client-side (§13.2). */
     val supportedFirstFactors: List<String>?,
     val authorizationUrl: String?,
+    /** The session id the server stamps on a completed attempt (`created_session_id`). */
+    val createdSessionId: String?,
     /** Present for exactly the step that reached `complete`; exchanged then gone. */
     val ticket: String?,
 ) {
@@ -20,10 +24,175 @@ data class SignInAttempt(
         fun from(json: JsonValue): SignInAttempt = SignInAttempt(
             id = json.string("id") ?: throw AtlasException(AtlasError.Decoding("Attempt has no id.")),
             status = json.string("status") ?: "unknown",
+            identifier = json.string("identifier"),
             supportedFirstFactors = json.arr("supported_first_factors")?.items
                 ?.mapNotNull { (it as? JsonValue.Str)?.value },
             authorizationUrl = json.string("authorization_url"),
+            createdSessionId = json.string("created_session_id"),
             ticket = json.string("ticket"),
+        )
+    }
+}
+
+/**
+ * A sign-up attempt (§5.1). Like [SignInAttempt] the SDK reads `status` and lets
+ * the server decide the next step; a `complete` attempt carries the one-time
+ * `ticket` to exchange for a session.
+ */
+data class SignUpAttempt(
+    val id: String,
+    val status: String,
+    val identifier: String?,
+    val createdSessionId: String?,
+    val ticket: String?,
+) {
+    val isComplete: Boolean get() = status == "complete"
+
+    companion object {
+        fun from(json: JsonValue): SignUpAttempt = SignUpAttempt(
+            id = json.string("id") ?: throw AtlasException(AtlasError.Decoding("Attempt has no id.")),
+            status = json.string("status") ?: "unknown",
+            identifier = json.string("identifier"),
+            createdSessionId = json.string("created_session_id"),
+            ticket = json.string("ticket"),
+        )
+    }
+}
+
+/**
+ * The reply to `prepare_first_factor` for a code/link strategy. `pollSecret` is
+ * held by THIS tab only — it is what makes the cross-device email-link flow safe
+ * (§5.3), returned so a caller that wants to poll can do so.
+ */
+data class PreparedFirstFactor(
+    val attemptId: String,
+    val status: String,
+    val strategy: String?,
+    val pollSecret: String?,
+) {
+    companion object {
+        fun from(json: JsonValue): PreparedFirstFactor = PreparedFirstFactor(
+            attemptId = json.string("id") ?: "",
+            status = json.string("status") ?: "unknown",
+            strategy = json.string("strategy"),
+            pollSecret = json.string("poll_secret"),
+        )
+    }
+}
+
+/**
+ * The reply to `prepare_second_factor`. The fields present depend on the
+ * strategy: `sms` returns `sentTo` (a masked number); `push` returns
+ * `challengeId` + `numberMatch` (shown on this screen, tapped on the device);
+ * a passkey/security-key returns the raw WebAuthn request options, left as parsed
+ * JSON for a native layer to turn into a platform assertion.
+ */
+data class SecondFactorChallenge(
+    val strategy: String?,
+    val sentTo: String?,
+    val challengeId: String?,
+    val numberMatch: Int?,
+    val expiresAt: Long?,
+    /** The raw challenge object (passkey request options etc.), as parsed JSON. */
+    val raw: JsonValue,
+) {
+    companion object {
+        fun from(json: JsonValue): SecondFactorChallenge = SecondFactorChallenge(
+            strategy = json.string("strategy"),
+            sentTo = json.string("sent_to"),
+            challengeId = json.string("challenge_id"),
+            numberMatch = json.number("number_match")?.toInt(),
+            expiresAt = json.long("expires_at"),
+            raw = json,
+        )
+    }
+}
+
+/**
+ * The reply to `prepare_mfa_enrollment` — a TOTP secret returned exactly once.
+ * `uri` is the `otpauth://` provisioning URI a caller renders as a QR code.
+ */
+data class MfaEnrollment(
+    val factorId: String,
+    val secret: String,
+    val uri: String,
+) {
+    companion object {
+        fun from(json: JsonValue): MfaEnrollment = MfaEnrollment(
+            factorId = json.string("factor_id") ?: throw AtlasException(AtlasError.Decoding("No factor_id.")),
+            secret = json.string("secret") ?: throw AtlasException(AtlasError.Decoding("No secret.")),
+            uri = json.string("uri") ?: "",
+        )
+    }
+}
+
+/** An organization (§8/§9.2). */
+data class Organization(
+    val id: String,
+    val name: String,
+    val slug: String?,
+    val imageUrl: String?,
+    val maxAllowedMemberships: Int?,
+    val createdAt: Long?,
+    val publicMetadata: JsonValue?,
+) {
+    companion object {
+        fun from(json: JsonValue): Organization = Organization(
+            id = json.string("id") ?: throw AtlasException(AtlasError.Decoding("Organization has no id.")),
+            name = json.string("name") ?: "",
+            slug = json.string("slug"),
+            imageUrl = json.string("image_url"),
+            maxAllowedMemberships = json.number("max_allowed_memberships")?.toInt(),
+            createdAt = json.long("created_at"),
+            publicMetadata = (json as? JsonValue.Obj)?.entries?.get("public_metadata"),
+        )
+    }
+}
+
+/** A membership of the signed-in user in an [Organization] with their role. */
+data class OrganizationMembership(
+    val role: String?,
+    val organization: Organization,
+) {
+    companion object {
+        fun from(json: JsonValue): OrganizationMembership = OrganizationMembership(
+            role = json.string("role"),
+            organization = Organization.from(
+                json.obj("organization")
+                    ?: throw AtlasException(AtlasError.Decoding("Membership has no organization.")),
+            ),
+        )
+    }
+}
+
+/**
+ * One of the signed-in user's active sessions/devices (`GET /v1/client/sessions`).
+ * `current` marks the device the request itself arrived on.
+ */
+data class SessionDevice(
+    val id: String,
+    val status: String,
+    val current: Boolean,
+    val lastActiveAt: Long?,
+    val expireAt: Long?,
+    val ipAddress: String?,
+    val deviceLabel: String?,
+    val browser: String?,
+    val os: String?,
+    val location: String?,
+) {
+    companion object {
+        fun from(json: JsonValue): SessionDevice = SessionDevice(
+            id = json.string("id") ?: "",
+            status = json.string("status") ?: "unknown",
+            current = json.bool("current") ?: false,
+            lastActiveAt = json.long("last_active_at"),
+            expireAt = json.long("expire_at"),
+            ipAddress = json.string("ip_address"),
+            deviceLabel = json.string("device_label"),
+            browser = json.string("browser"),
+            os = json.string("os"),
+            location = json.string("location"),
         )
     }
 }

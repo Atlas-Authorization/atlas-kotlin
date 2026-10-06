@@ -36,13 +36,81 @@ sealed interface JsonValue {
     }
 }
 
-/** Serialize a flat string map to a JSON object body — all the SDK ever POSTs. */
+/** Serialize a flat string map to a JSON object body. */
 internal fun encodeJsonObject(fields: Map<String, String>): String {
     val body = fields.entries.joinToString(",") { (k, v) ->
         "${quote(k)}:${quote(v)}"
     }
     return "{$body}"
 }
+
+/**
+ * Serialize any [JsonValue] tree to a JSON string — the writer the flow driver
+ * and the `/me` mutations use for bodies that are not flat string maps (nested
+ * `unsafe_metadata`, a `scopes` array, a code list). Still dependency-free: the
+ * same hand-rolled path as the reader, so the module keeps its only runtime
+ * dependency at kotlinx-coroutines.
+ */
+internal fun encodeJsonValue(value: JsonValue): String {
+    val sb = StringBuilder()
+    writeJson(value, sb)
+    return sb.toString()
+}
+
+private fun writeJson(value: JsonValue, sb: StringBuilder) {
+    when (value) {
+        is JsonValue.Obj -> {
+            sb.append('{')
+            var first = true
+            for ((k, v) in value.entries) {
+                if (!first) sb.append(',')
+                first = false
+                sb.append(quote(k)).append(':')
+                writeJson(v, sb)
+            }
+            sb.append('}')
+        }
+        is JsonValue.Arr -> {
+            sb.append('[')
+            value.items.forEachIndexed { i, item ->
+                if (i > 0) sb.append(',')
+                writeJson(item, sb)
+            }
+            sb.append(']')
+        }
+        is JsonValue.Str -> sb.append(quote(value.value))
+        is JsonValue.Num -> {
+            val d = value.value
+            // Render a whole number without the ".0" the server never sends back.
+            if (!d.isInfinite() && !d.isNaN() && d == Math.floor(d) && kotlin.math.abs(d) < 1e15) {
+                sb.append(d.toLong().toString())
+            } else {
+                sb.append(d.toString())
+            }
+        }
+        is JsonValue.Bool -> sb.append(if (value.value) "true" else "false")
+        JsonValue.Null -> sb.append("null")
+    }
+}
+
+/**
+ * Build a JSON object body from name/value pairs, dropping any pair whose value
+ * is null — so an absent optional field is simply omitted (matching the FAPI,
+ * which distinguishes "omitted" from an explicit null). The value helpers
+ * ([jstr], [jarr], [jbool], [jnum]) return null for an absent input, so an
+ * optional argument folds straight into the object.
+ */
+internal fun jsonBody(vararg pairs: Pair<String, JsonValue?>): String {
+    val entries = LinkedHashMap<String, JsonValue>()
+    for ((k, v) in pairs) if (v != null) entries[k] = v
+    return encodeJsonValue(JsonValue.Obj(entries))
+}
+
+internal fun jstr(value: String?): JsonValue? = value?.let { JsonValue.Str(it) }
+internal fun jbool(value: Boolean?): JsonValue? = value?.let { JsonValue.Bool(it) }
+internal fun jnum(value: Number?): JsonValue? = value?.let { JsonValue.Num(it.toDouble()) }
+internal fun jarr(values: List<String>?): JsonValue? =
+    values?.let { JsonValue.Arr(it.map { s -> JsonValue.Str(s) }) }
 
 private fun quote(s: String): String {
     val sb = StringBuilder(s.length + 2)
