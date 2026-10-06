@@ -42,6 +42,14 @@ sealed class AtlasException(message: String) : Exception(message) {
     /** A malformed response body — the server contract drifted. */
     class Decoding(val detail: String) : AtlasException(detail)
 
+    /**
+     * A local passkey (WebAuthn) ceremony failed or was cancelled by the user —
+     * raised by the platform Credential Manager, not by the server. The [detail]
+     * carries the Credential Manager's reason (e.g. a user cancellation or
+     * "no credential available").
+     */
+    class Ceremony(val detail: String) : AtlasException(detail)
+
     /** An authenticated call was made with no stored session. */
     object NotSignedIn : AtlasException("You must be signed in.")
 

@@ -8,8 +8,7 @@ and shape-for-shape, which in turn mirrors the vanilla JS client (`@atlas/js`).
 
 > **Scope.** This is a solid, tested *foundation*: the client-facing auth core a
 > native app needs. It is not yet a complete SDK — see [Scope](#scope) for what a
-> full release still needs (native passkeys/WebAuthn, prebuilt UI, the multi-step
-> MFA driver).
+> full release still needs (prebuilt UI, the multi-step MFA driver).
 
 ## Install
 
@@ -18,7 +17,7 @@ Gradle (Kotlin DSL). The library publishes as `net.atlasauth:atlas-android`:
 ```kotlin
 // build.gradle.kts (app module)
 dependencies {
-    implementation("net.atlasauth:atlas-android:0.1.0")
+    implementation("net.atlasauth:atlas-android:0.3.0")
 }
 ```
 
@@ -101,6 +100,8 @@ override fun onNewIntent(intent: Intent) {
 | `refresh()` | `POST /v1/client/sessions/:id/tokens` |
 | `signOut()` | `POST /v1/client/sessions/:id/revoke` |
 | `hasSession()` | *(offline — reads the token store)* |
+| `PasskeyManager.registerPasskey(activity, name?)` | `POST /v1/client/me/passkeys/begin` → `…/finish` |
+| `PasskeyManager.signInWithPasskey(activity)` | `POST /v1/client/sign_ins/passkey/begin` → `…/finish` → `tickets/exchange` |
 
 Every request sends `x-publishable-key`. The short-lived session **JWT** is
 stored via the `TokenStore`; the long-lived **`__atlas_rt`** refresh token is
@@ -129,6 +130,47 @@ bearer — no cookie jar needed:
 
 Both `suspend` helpers **fail soft**, returning `null` on any error — the
 caller's cue to re-run OAuth.
+
+## Passkeys (WebAuthn)
+
+New in **0.3.0** (`Passkeys.kt`). Native passkeys driven by the Jetpack
+[Credential Manager](https://developer.android.com/jetpack/androidx/releases/credentials)
+(`androidx.credentials`). The server's `begin` response is the standard WebAuthn
+options JSON, which Credential Manager consumes directly; the ceremony result is
+mapped to the `finish` body. The `rpId` comes from the server's options — it is
+never hardcoded.
+
+The ceremony shows system UI, so both methods take an **Activity** `Context`.
+
+```kotlin
+val atlas = AtlasClient.create(context, publishableKey = "pk_live_…", frontendApi = "…")
+val passkeys = PasskeyManager.create(context, atlas)
+
+lifecycleScope.launch {
+    // Register a passkey for the signed-in user (requires an existing session).
+    passkeys.registerPasskey(activity = this@MyActivity, name = "Pixel 8")
+
+    // Sign in with a passkey — no session needed. Completes into a real Atlas
+    // session (the ticket exchange is handled for you) and returns the user.
+    val user = passkeys.signInWithPasskey(activity = this@MyActivity)
+    Log.d("atlas", "signed in as ${user.id}")
+}
+```
+
+A user cancellation or platform failure surfaces as `AtlasException.Ceremony`; a
+server rejection as `AtlasException.Api`.
+
+### Setup: Digital Asset Links
+
+Android binds a passkey to your app via **Digital Asset Links**: the RP id (your
+instance's Frontend API host) must publish an `assetlinks.json` that lists your
+app's package name and signing-certificate SHA-256 fingerprints.
+
+You do **not** host that file. Atlas serves `/.well-known/assetlinks.json` on the
+Frontend API host per instance automatically — you only configure your app's
+signing-cert fingerprints (debug and release) in your Atlas instance settings.
+Add both, or passkeys will fail silently in the build whose fingerprint is
+missing.
 
 ## Token storage
 
@@ -168,7 +210,8 @@ try {
 ```
 
 `AtlasException` is a sealed class: `Api(statusCode, errors)`, `Transport`
-(network), `Decoding` (contract drift), and `NotSignedIn` (raised locally when an
+(network), `Decoding` (contract drift), `Ceremony` (a passkey/WebAuthn ceremony
+failed or was cancelled on the device), and `NotSignedIn` (raised locally when an
 authenticated call has no session). `code` and `status` are convenience
 accessors that are non-null only for `Api`.
 
@@ -194,7 +237,9 @@ the exact three endpoints with the exact bodies and stores the returned JWT +
 refresh cookie; that a 4xx/5xx becomes an `AtlasException` with the right `code`;
 that `currentUser()` decodes the full `/me` shape and presents the cookie; that
 `refresh()` rotates the stored token; that `signOut()` clears storage even when
-the revoke call fails; and the token-store + `JsonValue` round-trips. The
+the revoke call fails; and the token-store + `JsonValue` round-trips. The passkey
+WebAuthn-JSON → `finish`-body mapping is unit-tested without a device (the
+Credential Manager sits behind the injectable `PasskeyAuthenticator` seam). The
 `EncryptedSharedPreferences` store is exercised by the instrumented test, since it
 needs the Android Keystore.
 
@@ -202,8 +247,6 @@ needs the Android Keystore.
 
 A complete native SDK on top of this foundation would add:
 
-- **Native passkeys / WebAuthn** via the Credential Manager API (register +
-  authenticate, first- and second-factor).
 - **A multi-step flow driver** mirroring `@atlas/js`'s `nextStep` / `advance` —
   email-code, second factor, MFA enrollment, password reset — instead of the
   single password happy-path here.

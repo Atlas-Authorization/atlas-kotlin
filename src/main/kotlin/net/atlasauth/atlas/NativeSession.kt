@@ -64,7 +64,7 @@ private val nativeSessionJson = Json {
  * A live Atlas session held outside a cookie.
  *
  * [sessionToken] is the short-lived (~60s) session JWT sent as `Authorization:
- * Bearer …` on `/v1/client/me/*`. [refreshToken] mints the next one and ROTATES on
+ * Bearer …` on `/v1/client/me/…`. [refreshToken] mints the next one and ROTATES on
  * every refresh — persist the new value, discard the old. [expiresInSeconds] is
  * the lifetime the server reported for [sessionToken], a scheduling hint only.
  */
@@ -313,7 +313,7 @@ class NativeSessionManager(
     }
 
     /**
-     * The headers an authenticated `/v1/client/me/*` call needs: a fresh bearer
+     * The headers an authenticated `/v1/client/me/…` call needs: a fresh bearer
      * (auto-refreshed like [token]) plus the publishable key. When signed out, only
      * the publishable key is returned.
      */

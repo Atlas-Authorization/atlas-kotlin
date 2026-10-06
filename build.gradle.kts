@@ -51,6 +51,12 @@ dependencies {
     api(libs.okhttp)
     implementation(libs.androidx.security.crypto)
 
+    // Native passkeys / WebAuthn via the Jetpack Credential Manager. The
+    // play-services-auth provider backs passkeys with Google Password Manager on
+    // devices that ship it.
+    api(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -62,14 +68,14 @@ dependencies {
 
 // Maven coordinate: net.atlasauth:atlas-android
 group = "net.atlasauth"
-version = "0.2.0"
+version = "0.3.0"
 
 publishing {
     publications {
         register<MavenPublication>("release") {
             groupId = "net.atlasauth"
             artifactId = "atlas-android"
-            version = "0.2.0"
+            version = "0.3.0"
             afterEvaluate {
                 from(components["release"])
             }

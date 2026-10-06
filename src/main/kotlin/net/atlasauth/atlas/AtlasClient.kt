@@ -133,6 +133,42 @@ class AtlasClient(
     }
 
     /**
+     * Finish a passkey sign-in and persist the session. Unlike password sign-in,
+     * a passkey does NOT use the ticket exchange — a verified passkey is two
+     * factors in one gesture, so `POST /v1/client/sign_ins/passkey/finish` mints
+     * the session itself and returns the completed attempt (`jwt` +
+     * `created_session_id`) with the refresh token as a Set-Cookie. Used by
+     * [PasskeyManager.signInWithPasskey] after it drives the platform ceremony.
+     */
+    internal suspend fun completePasskeySignIn(body: Map<String, String>): AtlasUser {
+        val response = send(
+            method = "POST",
+            path = "/v1/client/sign_ins/passkey/finish",
+            body = body,
+            cookie = null,
+        )
+        throwIfError(response)
+
+        val attempt = decode(response.body, SignInAttempt.serializer())
+        if (!attempt.isComplete) {
+            throw AtlasException.Api(
+                statusCode = 200,
+                errors = listOf(
+                    AtlasErrorItem(
+                        code = "sign_in_not_complete",
+                        message = "Passkey sign-in needs an additional step: ${attempt.status}.",
+                    ),
+                ),
+            )
+        }
+        val tokens = decode(response.body, SessionTokens.serializer())
+        val refresh = extractCookie(Cookie.REFRESH, response.setCookies)
+        val sessionId = attempt.createdSessionId ?: tokens.resolvedSessionId ?: ""
+        tokenStore.save(AtlasSession(sessionId = sessionId, token = tokens.jwt, refreshToken = refresh))
+        return currentUser()
+    }
+
+    /**
      * Build the provider authorize URL for an OAuth sign-in
      * (`POST /v1/client/sign_ins/oauth`). Hand the returned URL to a Custom Tab /
      * browser; on the callback, pull the redirect params and call
@@ -242,6 +278,35 @@ class AtlasClient(
         val response = send("POST", path, body, cookie = null)
         throwIfError(response)
         return decode(response.body, deserializer)
+    }
+
+    /**
+     * POST a string-valued JSON body and return the raw response body, letting the
+     * caller parse it. Used by the passkey ceremony (see [PasskeyManager]), whose
+     * `begin` responses are opaque WebAuthn options passed straight to the platform
+     * authenticator rather than decoded into a model.
+     *
+     * [authenticated] presents the stored session the way [currentUser] does — the
+     * `/me/passkeys/…` register routes require a signed-in user; the
+     * `/sign_ins/passkey/…` routes send only the publishable key.
+     *
+     * @throws AtlasException.NotSignedIn when [authenticated] is set but no session
+     *   is stored.
+     */
+    internal suspend fun postRaw(
+        path: String,
+        body: Map<String, String>,
+        authenticated: Boolean,
+    ): String {
+        val cookie = if (authenticated) {
+            val stored = tokenStore.load() ?: throw AtlasException.NotSignedIn
+            cookieHeader(stored)
+        } else {
+            null
+        }
+        val response = send("POST", path, body, cookie)
+        throwIfError(response)
+        return response.body
     }
 
     /**
