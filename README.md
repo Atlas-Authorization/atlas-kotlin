@@ -1,92 +1,80 @@
-# Atlas Android SDK
+# Atlas Kotlin (JVM) SDK
 
-The official native **Android / Kotlin** SDK for the [Atlas](../../) auth
-platform — a dependency-light Android library that speaks the Atlas Frontend API
-(FAPI) with **OkHttp** + **Kotlin coroutines** + **kotlinx.serialization**. It is
-the Android peer of the [Swift SDK](../swift) and mirrors it endpoint-for-endpoint
-and shape-for-shape, which in turn mirrors the vanilla JS client (`@atlas/js`).
-
-> **Scope.** This is a solid, tested *foundation*: the client-facing auth core a
-> native app needs. It is not yet a complete SDK — see [Scope](#scope) for what a
-> full release still needs (prebuilt UI, the multi-step MFA driver).
+The official **Kotlin / JVM** SDK for the [Atlas](../../) auth platform — a
+dependency-light, pure-JVM library (no Android SDK required) that speaks the
+Atlas Frontend API (FAPI) with `HttpURLConnection` + coroutines. It mirrors the
+vanilla JS client (`@atlas/js`) endpoint-for-endpoint and shape-for-shape.
 
 ## Install
 
-Gradle (Kotlin DSL). The library publishes as `net.atlasauth:atlas-android`:
+Gradle (Kotlin DSL). Publishes as [`net.atlasauth:atlas-kotlin`](https://central.sonatype.com/artifact/net.atlasauth/atlas-kotlin):
 
 ```kotlin
-// build.gradle.kts (app module)
-dependencies {
-    implementation("net.atlasauth:atlas-android:0.3.0")
-}
+implementation("net.atlasauth:atlas-kotlin:0.3.0")
 ```
 
-Or depend on it locally inside this monorepo:
+For a native **Android** app that needs the passkey ceremony, use the
+Android-library SDK [`net.atlasauth:atlas-android`](https://central.sonatype.com/artifact/net.atlasauth/atlas-android) instead (source in `sdks/kotlin`).
 
-```kotlin
-// settings.gradle.kts
-include(":atlas-android")
-project(":atlas-android").projectDir = file("../atlas-kotlin")
-```
+> **Scope.** This is a solid, tested *foundation*: the client-facing auth core an
+> Android app needs. It is not yet a complete SDK — see [Scope](#scope) for what a
+> full release still needs (prebuilt UI, the multi-step MFA driver).
 
-- **min SDK 24**, compile SDK 34.
-- Package: `net.atlasauth.atlas`.
-- Transitive deps: OkHttp, kotlinx-serialization-json, kotlinx-coroutines,
-  androidx.security:security-crypto.
+> **Passkeys live elsewhere.** This module is deliberately a plain Kotlin/JVM
+> library that builds and unit-tests with no Android SDK (see
+> [Design](#design-dependency-light-on-purpose)). A native passkey ceremony needs
+> the Android-only Jetpack Credential Manager and an `Activity`, which cannot run
+> in a plain-JVM module. Passkey register + sign-in ship in the Android-library
+> SDK `net.atlasauth:atlas-android` (`sdks/kotlin`) via its `PasskeyManager` — use
+> that SDK if you need passkeys.
+
+## Design: dependency-light on purpose
+
+- **No third-party HTTP client** — the JDK's `HttpURLConnection`, behind an
+  `HttpTransport` interface so tests inject a fake and run with no network.
+- **No JSON library** — a small hand-rolled reader/writer (`Json.kt`), so there
+  is no `org.json` (absent from plain-JVM tests) and no kotlinx.serialization
+  compiler plugin to fetch.
+- **Plain Kotlin/JVM module**, not an Android app module: it builds and unit-tests
+  with no Android SDK. The one Android-only piece — EncryptedSharedPreferences —
+  is reached through a `KeyValueStore` seam (see below).
+
+The only runtime dependency is `kotlinx-coroutines-core`.
 
 ## Quick start
 
 ```kotlin
-import net.atlasauth.atlas.AtlasClient
-
-// `create` wires the encrypted token store, namespaced by the publishable key.
-val atlas = AtlasClient.create(
-    context = applicationContext,
+val atlas = AtlasClient(
     publishableKey = "pk_live_…",
-    frontendApi = "clerk.your-domain.com",   // bare host is upgraded to https://
+    frontendApi = "clerk.your-domain.com",   // bare host upgraded to https://
+    tokenStore = SecurePrefsTokenStore(encryptedPrefsAdapter),
 )
 
-// All network calls are suspend functions — call them from a coroutine.
-lifecycleScope.launch {
-    // Password sign-in: create attempt → attempt first factor → exchange ticket.
-    // The session JWT + refresh cookie are persisted to EncryptedSharedPreferences.
-    val user = atlas.signIn(email = "ada@example.com", password = "…")
-    Log.d("atlas", "${user.id} ${user.primaryEmailId}")
+// Password sign-in: create attempt → attempt first factor → exchange ticket.
+val user = atlas.signIn("ada@example.com", "…")
 
-    // Read the signed-in user later.
-    val me = atlas.currentUser()
+// Read the signed-in user later.
+val me = atlas.currentUser()
 
-    // Rotate the token (call before it expires, or on a 401 retry).
-    atlas.refresh()
+// Rotate the token (before expiry, or on a 401 retry).
+atlas.refresh()
 
-    // Sign out — revokes server-side and clears the encrypted store.
-    atlas.signOut()
-}
+// Sign out — revokes server-side and clears storage.
+atlas.signOut()
 ```
 
-### OAuth (Custom Tabs / browser)
+All auth methods are `suspend` — call them from a coroutine.
+
+### OAuth (Custom Tabs)
 
 ```kotlin
-lifecycleScope.launch {
-    val authUrl = atlas.oauthAuthorizeUrl(
-        provider = "google",
-        redirectUri = "myapp://callback",
-    )
-    // Open authUrl in a Chrome Custom Tab / browser.
-    CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(authUrl))
-}
+val authUrl = atlas.oauthAuthorizeUrl(provider = "google", redirectUri = "myapp://callback")
+CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(authUrl))
 
-// In the Activity that receives the myapp://callback deep link:
-override fun onNewIntent(intent: Intent) {
-    super.onNewIntent(intent)
-    val data = intent.data ?: return
-    // Atlas appends __atlas_attempt + __atlas_ticket to the callback.
-    val attempt = data.getQueryParameter("__atlas_attempt")
-    val ticket = data.getQueryParameter("__atlas_ticket")
-    if (attempt != null && ticket != null) {
-        lifecycleScope.launch { atlas.exchangeTicket(attemptId = attempt, ticket = ticket) }
-    }
-}
+// In your deep-link handler for myapp://callback:
+val attempt = uri.getQueryParameter("__atlas_attempt")
+val ticket  = uri.getQueryParameter("__atlas_ticket")
+if (attempt != null && ticket != null) atlas.exchangeTicket(attempt, ticket)
 ```
 
 ## Surface
@@ -99,149 +87,73 @@ override fun onNewIntent(intent: Intent) {
 | `currentUser()` | `GET /v1/client/me` |
 | `refresh()` | `POST /v1/client/sessions/:id/tokens` |
 | `signOut()` | `POST /v1/client/sessions/:id/revoke` |
-| `hasSession()` | *(offline — reads the token store)* |
-| `PasskeyManager.registerPasskey(activity, name?)` | `POST /v1/client/me/passkeys/begin` → `…/finish` |
-| `PasskeyManager.signInWithPasskey(activity)` | `POST /v1/client/sign_ins/passkey/begin` → `…/finish` → `tickets/exchange` |
 
 Every request sends `x-publishable-key`. The short-lived session **JWT** is
 stored via the `TokenStore`; the long-lived **`__atlas_rt`** refresh token is
-captured from the `Set-Cookie` header and re-presented on authenticated calls —
-the app never handles it directly.
-
-Models mirror `Models.swift`: `SignInAttempt`, `SessionTokens`, `AtlasUser`,
-`EmailAddress`, `ExternalAccount`, `Passkey`, `AtlasSession`, plus the `JsonValue`
-type for arbitrary `public_metadata` / `unsafe_metadata`.
-
-### Native session (first-party OAuth, cookie-free)
-
-New in **0.2.0** (`NativeSession.kt`). A first-party app trades an OAuth access
-token it already holds for a real Atlas session and carries it by hand as a
-bearer — no cookie jar needed:
-
-- `exchangeForSession(baseUrl, clientId, accessToken, httpClient)` — RFC 8693
-  token-exchange against `POST /oauth2/token`.
-- `refreshNativeSession(baseUrl, publishableKey, sessionId, refreshToken, httpClient)`
-  — rotate without a cookie via `POST /v1/client/sessions/:id/tokens`.
-- `NativeSessionManager` — holds the session, hands out a fresh bearer via
-  `token()` / `authHeaders()` (lazy, single-flight refresh ~10s before expiry via
-  a `Mutex`), and persists each rotated refresh token to the `TokenStore`.
-  `NativeSessionManager.create(context, publishableKey, frontendApi, clientId)`
-  wires the `EncryptedSharedPreferencesTokenStore`.
-
-Both `suspend` helpers **fail soft**, returning `null` on any error — the
-caller's cue to re-run OAuth.
-
-## Passkeys (WebAuthn)
-
-New in **0.3.0** (`Passkeys.kt`). Native passkeys driven by the Jetpack
-[Credential Manager](https://developer.android.com/jetpack/androidx/releases/credentials)
-(`androidx.credentials`). The server's `begin` response is the standard WebAuthn
-options JSON, which Credential Manager consumes directly; the ceremony result is
-mapped to the `finish` body. The `rpId` comes from the server's options — it is
-never hardcoded.
-
-The ceremony shows system UI, so both methods take an **Activity** `Context`.
-
-```kotlin
-val atlas = AtlasClient.create(context, publishableKey = "pk_live_…", frontendApi = "…")
-val passkeys = PasskeyManager.create(context, atlas)
-
-lifecycleScope.launch {
-    // Register a passkey for the signed-in user (requires an existing session).
-    passkeys.registerPasskey(activity = this@MyActivity, name = "Pixel 8")
-
-    // Sign in with a passkey — no session needed. Completes into a real Atlas
-    // session (the ticket exchange is handled for you) and returns the user.
-    val user = passkeys.signInWithPasskey(activity = this@MyActivity)
-    Log.d("atlas", "signed in as ${user.id}")
-}
-```
-
-A user cancellation or platform failure surfaces as `AtlasException.Ceremony`; a
-server rejection as `AtlasException.Api`.
-
-### Setup: Digital Asset Links
-
-Android binds a passkey to your app via **Digital Asset Links**: the RP id (your
-instance's Frontend API host) must publish an `assetlinks.json` that lists your
-app's package name and signing-certificate SHA-256 fingerprints.
-
-You do **not** host that file. Atlas serves `/.well-known/assetlinks.json` on the
-Frontend API host per instance automatically — you only configure your app's
-signing-cert fingerprints (debug and release) in your Atlas instance settings.
-Add both, or passkeys will fail silently in the build whose fingerprint is
-missing.
+captured from `Set-Cookie` and replayed on authenticated calls — the app never
+handles it directly.
 
 ## Token storage
 
 `TokenStore` is an interface, so persistence is yours to choose:
 
-- **`EncryptedSharedPreferencesTokenStore`** (default via `AtlasClient.create`) —
-  one entry in an `EncryptedSharedPreferences` file, encrypted at rest by a key
-  held in the Android Keystore (hardware-backed where available). The peer of the
-  Swift SDK's Keychain store.
-- **`InMemoryTokenStore`** — process-lifetime; tests and previews.
-- Implement your own for a custom vault.
+- **`SecurePrefsTokenStore`** — the production shape. Back it with androidx's
+  `EncryptedSharedPreferences` via the `KeyValueStore` adapter:
 
-```kotlin
-val atlas = AtlasClient(
-    publishableKey = "pk_…",
-    frontendApi = "clerk.your-domain.com",
-    tokenStore = EncryptedSharedPreferencesTokenStore(context, account = "pk_…"),
-)
-```
+  ```kotlin
+  val prefs = EncryptedSharedPreferences.create(
+      context, "atlas_session",
+      MasterKey.Builder(context).setKeyScheme(AES256_GCM).build(),
+      AES256_SIV, AES256_GCM,
+  )
+  val store = SecurePrefsTokenStore(object : KeyValueStore {
+      override fun getString(key: String) = prefs.getString(key, null)
+      override fun putString(key: String, value: String) = prefs.edit().putString(key, value).apply()
+      override fun remove(key: String) = prefs.edit().remove(key).apply()
+  })
+  ```
+
+- **`InMemoryTokenStore`** — process-lifetime; tests and previews.
+- Implement `TokenStore` yourself for a custom vault.
 
 ## Errors
 
-Everything throws `AtlasException`, decoded from the §9.1 envelope
-`{ errors: [{ code, message, param? }] }`:
+Everything throws `AtlasException`, wrapping an `AtlasError` decoded from the §9.1
+envelope `{ errors: [{ code, message, param? }] }`:
 
 ```kotlin
 try {
-    atlas.signIn(email = e, password = p)
-} catch (error: AtlasException) {
-    when (error.code) {
+    atlas.signIn(email, password)
+} catch (e: AtlasException) {
+    when (e.error.code) {
         "form_password_incorrect" -> …
         "form_identifier_not_found" -> …
-        else -> showBanner(error.message)   // message is always non-null
+        else -> showBanner(e.error.message)   // message is always non-null
     }
-    Log.d("atlas", "${error.status}")        // HTTP status for Api errors
+    val status = e.error.status               // HTTP status for Api errors
 }
 ```
 
-`AtlasException` is a sealed class: `Api(statusCode, errors)`, `Transport`
-(network), `Decoding` (contract drift), `Ceremony` (a passkey/WebAuthn ceremony
-failed or was cancelled on the device), and `NotSignedIn` (raised locally when an
-authenticated call has no session). `code` and `status` are convenience
-accessors that are non-null only for `Api`.
+`AtlasError` is a sealed class: `Api` (server envelope), `Transport` (network),
+`Decoding` (contract drift), `NotSignedIn` (raised locally).
 
-## ProGuard / R8
-
-The library ships `consumer-rules.pro`, so apps that enable R8 need **no extra
-configuration** — the rules keep kotlinx.serialization's generated `$serializer`
-classes for every Atlas model, which R8 would otherwise strip (causing a
-`SerializationException` at decode time). If you relocate/repackage the SDK,
-carry those rules along.
-
-## Tests
+## Build & test
 
 ```bash
-./gradlew test                    # JVM unit tests (offline, MockWebServer)
-./gradlew connectedAndroidTest    # instrumented store test (device/emulator)
+gradle test        # or ./gradlew test once a wrapper is added
 ```
 
-The unit tests run entirely offline against OkHttp's `MockWebServer` — a direct
-port of the Swift SDK's `MockURLProtocol` suite. They pin: base-URL resolution
-and the `x-publishable-key` header on every request; that password sign-in walks
-the exact three endpoints with the exact bodies and stores the returned JWT +
-refresh cookie; that a 4xx/5xx becomes an `AtlasException` with the right `code`;
-that `currentUser()` decodes the full `/me` shape and presents the cookie; that
-`refresh()` rotates the stored token; that `signOut()` clears storage even when
-the revoke call fails; and the token-store + `JsonValue` round-trips. The passkey
-WebAuthn-JSON → `finish`-body mapping is unit-tested without a device (the
-Credential Manager sits behind the injectable `PasskeyAuthenticator` seam). The
-`EncryptedSharedPreferences` store is exercised by the instrumented test, since it
-needs the Android Keystore.
+12 unit tests run entirely offline against a `FakeTransport` — no network, no
+MockWebServer. They pin: the auth header + base URL on every request; that
+password sign-in walks the exact three endpoints with the exact bodies and stores
+the returned JWT + refresh cookie; that a 4xx/5xx becomes an `AtlasError` with the
+right `code`; that `currentUser()` parses the full `/me` shape and presents the
+cookie; that `refresh()` rotates the stored token; and both token-store round
+trips (in-memory and the EncryptedSharedPreferences-shaped store).
+
+Built as a plain Kotlin/JVM library. To ship it inside an Android app, add the
+`com.android.library` plugin, the `androidx.security:security-crypto` dependency,
+and (optionally) a Gradle wrapper.
 
 ## Scope
 
@@ -250,13 +162,7 @@ A complete native SDK on top of this foundation would add:
 - **A multi-step flow driver** mirroring `@atlas/js`'s `nextStep` / `advance` —
   email-code, second factor, MFA enrollment, password reset — instead of the
   single password happy-path here.
-- **Prebuilt Compose components** (`<SignIn>` / `<UserButton>` equivalents) and
-  an observable session object for reactive UI.
-- **Sign in with Google One-Tap** native token exchange
-  (`POST /v1/client/sign_ins/id_token`).
-- Organizations, session listing, and the `/me` mutation surface (email,
-  external accounts, metadata).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+- **Prebuilt Compose components** (`SignIn` / `UserButton` equivalents) and an
+  observable session holder for reactive UI.
+- **Native Google / One-Tap** token exchange (`POST /v1/client/sign_ins/id_token`).
+- Organizations, session listing, and the `/me` mutation surface.
