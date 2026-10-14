@@ -1,66 +1,117 @@
-// Atlas — the official Android SDK for the Atlas auth platform.
-//
-// Deliberately a plain Kotlin/JVM library, not an Android application module: the
-// auth core is pure Kotlin (HttpURLConnection + coroutines + a hand-rolled JSON
-// reader), so it needs no Android SDK to build or unit-test. The one Android-only
-// piece — EncryptedSharedPreferences — is reached through the `KeyValueStore`
-// seam (see TokenStore.kt), so this module stays toolchain-light while remaining
-// a drop-in for an Android app. Add the `com.android.library` plugin + an
-// androidx.security dependency when wiring it into a full Android build.
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
-    kotlin("jvm") version "2.2.20"
-    `java-library`
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
     id("com.vanniktech.maven.publish") version "0.30.0"
 }
 
-// Maven coordinate: net.atlasauth:atlas-kotlin (the dependency-light, pure-Kotlin/JVM
-// SDK). Distinct from the Android-library SDK net.atlasauth:atlas-android (sdks/kotlin),
-// which carries the native passkey ceremony.
-group = "net.atlasauth"
-version = "0.4.0"
+android {
+    namespace = "net.atlasauth.atlas"
+    compileSdk = 34
 
-repositories {
-    mavenCentral()
+    defaultConfig {
+        minSdk = 24
+        consumerProguardFiles("consumer-rules.pro")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+
+    buildFeatures {
+        // Prebuilt Jetpack Compose components (SignIn / UserButton).
+        compose = true
+    }
+
+    composeOptions {
+        // Compose compiler matched to Kotlin 1.9.24.
+        kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get()
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    api(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
+    api(libs.kotlinx.serialization.json)
+    api(libs.okhttp)
+    implementation(libs.androidx.security.crypto)
 
-    testImplementation(kotlin("test"))
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Native passkeys / WebAuthn via the Jetpack Credential Manager. The
+    // play-services-auth provider backs passkeys with Google Password Manager on
+    // devices that ship it, and the Credential Manager Google-ID provider backs
+    // the native "Sign in with Google" / One-Tap id_token flow.
+    api(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    api(libs.googleid)
+
+    // Prebuilt Jetpack Compose UI + observable session holder. `api` for the
+    // runtime (the public composables + StateFlow are part of the surface); the UI
+    // libraries are implementation details of those composables. The non-UI core
+    // (AtlasClient, flows, account surface) has no compile dependency on Compose.
+    val composeBom = platform(libs.androidx.compose.bom)
+    api(composeBom)
+    api(libs.androidx.compose.runtime)
+    // `ui` is `api`: `Modifier` appears in the public composables' signatures.
+    api(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
 
-kotlin {
-    // No jvmToolchain pin: this box has only JDK 25, so pinning 17 would force a
-    // network toolchain provision. Target 17 bytecode from whatever JDK runs Gradle.
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
-}
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-}
-
-tasks.test {
-    useJUnitPlatform()
-    testLogging {
-        events("passed", "skipped", "failed")
-    }
-}
+// Maven coordinate: net.atlasauth:atlas-android (the Android-library SDK — carries the
+// native passkey ceremony via the Jetpack Credential Manager). The dependency-light
+// pure-Kotlin/JVM SDK publishes separately as net.atlasauth:atlas-kotlin (sdks/android).
+group = "net.atlasauth"
+version = "0.5.0"
 
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     signAllPublications()
-    coordinates("net.atlasauth", "atlas-kotlin", "0.4.0")
+    // Android library: publish the release variant with sources + javadoc jars
+    // (both required by Maven Central).
+    configure(
+        AndroidSingleVariantLibrary(
+            variant = "release",
+            sourcesJar = true,
+            publishJavadocJar = true,
+        ),
+    )
+    coordinates("net.atlasauth", "atlas-android", "0.5.0")
     pom {
-        name.set("Atlas Kotlin SDK")
+        name.set("Atlas Android SDK")
         description.set(
-            "Dependency-light, pure-Kotlin/JVM client SDK for the Atlas authentication " +
-                "platform — speaks the Atlas Frontend API (FAPI) with HttpURLConnection + coroutines.",
+            "Official Android-library SDK for the Atlas authentication platform — the " +
+                "Atlas Frontend API client plus the native passkey/WebAuthn ceremony via the " +
+                "Jetpack Credential Manager.",
         )
         url.set("https://atlasauth.net")
         licenses {
@@ -80,9 +131,9 @@ mavenPublishing {
             }
         }
         scm {
-            connection.set("scm:git:https://github.com/Atlas-Authorization/atlas-kotlin.git")
-            developerConnection.set("scm:git:ssh://git@github.com/Atlas-Authorization/atlas-kotlin.git")
-            url.set("https://github.com/Atlas-Authorization/atlas-kotlin")
+            connection.set("scm:git:https://github.com/Atlas-Authorization/atlas-android.git")
+            developerConnection.set("scm:git:ssh://git@github.com/Atlas-Authorization/atlas-android.git")
+            url.set("https://github.com/Atlas-Authorization/atlas-android")
         }
     }
 }
