@@ -48,6 +48,25 @@ class SignInFlow internal constructor(private val client: AtlasClient) {
     private suspend fun post(path: String, body: JsonObject): FlowStep =
         absorb(client.requestRaw("POST", path, body.toString(), authenticated = false))
 
+    /**
+     * Continue an attempt the server holds at `needs_policy_acceptance`
+     * (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+     * [PolicyAcceptanceController.build] made; the proof is the attempt's one-time
+     * policy token. Returns the next step: usually [FlowStep.Done] (call [complete]),
+     * or [FlowStep.AcceptPolicies] again when a newer version was published meanwhile.
+     */
+    suspend fun acceptPolicies(acceptances: List<PolicyAcceptance>): FlowStep =
+        post(
+            "/v1/client/sign_ins/${attemptId()}/accept_policies",
+            acceptPoliciesBody(acceptances, attempt?.policyAcceptanceToken),
+        )
+
+    /** Seed the flow with an attempt handed over mid-stream (see [AtlasClient.resumeSignIn]). */
+    internal fun seed(seeded: FlowAttempt, response: AtlasClient.AtlasResponse? = null) {
+        attempt = seeded
+        last = response
+    }
+
     /** Start the attempt with an identifier (§5). `POST /v1/client/sign_ins`. */
     suspend fun create(identifier: String): FlowStep =
         post("/v1/client/sign_ins", buildJsonObject { put("identifier", identifier) })

@@ -45,6 +45,20 @@ class PasswordResetFlow internal constructor(private val client: AtlasClient) {
     private suspend fun post(path: String, body: JsonObject): FlowStep =
         absorb(client.requestRaw("POST", path, body.toString(), authenticated = false))
 
+    /**
+     * Continue an attempt the server holds at `needs_policy_acceptance`
+     * (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+     * [PolicyAcceptanceController.build] made; the proof is the attempt's one-time
+     * policy token. Returns the next step: usually [FlowStep.Done] (call [complete]),
+     * or [FlowStep.AcceptPolicies] again when a newer version was published meanwhile.
+     */
+    suspend fun acceptPolicies(acceptances: List<PolicyAcceptance>): FlowStep =
+        post(
+            "/v1/client/sign_ins/${attemptId()}/accept_policies",
+            acceptPoliciesBody(acceptances, attempt?.policyAcceptanceToken),
+        )
+
+    
     /** Request a reset for an email address. `POST /v1/client/password_resets`. */
     suspend fun request(email: String): FlowStep =
         post("/v1/client/password_resets", buildJsonObject { put("email_address", email) })

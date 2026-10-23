@@ -2,6 +2,16 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.8.0 — 2026-10-24
+
+### Added
+
+- **Policy acceptance** (terms of service, privacy, any policy the app defines).
+  - Client API: `client.policies(locale)` (`GET /v1/client/policies`), `client.myPolicies()` and `client.acceptMyPolicies(...)` (in-app re-acceptance), `PolicyGate`, and `client.signUpPolicyController()` / `client.policyController(attempt)` which build a `PolicyAcceptanceController` (per-policy ticks, reading clock, scroll-to-end flag, `canSubmit()`, `build()` into `policy_acceptances`).
+  - Sign-up: `SignUpFlow.create(..., policyAcceptances)` and `PasskeySignUpFlow.start(..., policyAcceptances)`. A 422 `POLICY_ACCEPTANCE_REQUIRED` is `AtlasException.isPolicyAcceptanceRequired`; `client.refreshPoliciesOnRequired(controller, error)` reloads the list.
+  - Sign-in: the new `FlowStep.AcceptPolicies` (status `needs_policy_acceptance`, `FlowAttempt.pendingPolicies` / `policyAcceptanceToken`) continues with `acceptPolicies(...)` on `SignInFlow`, `SignUpFlow`, `PasswordResetFlow` and `PasskeySignUpFlow`. `AtlasRedirectResult.parse(url)` reads `__atlas_attempt` / `__atlas_status` / `__atlas_policy_token` from a Custom Tab or web-auth callback, and `client.resumeSignIn(redirect)` / `resumeSignUp(redirect)` continue the held attempt. `client.beginIdTokenSignIn(...)` returns the flow for a native id_token sign-in that may be held.
+  - Compose UI: `AtlasPolicyConsent` (checkbox, combined or per policy, with an in-app document viewer), `AtlasPolicyClickwrap`, `AtlasPolicyScrollDialog` / `AtlasPolicyScrollHost` (unskippable dialog, Accept after the end is seen or when the text fits, Decline cancels), `AtlasPolicyAcceptStep`, `AtlasPolicyGate` (banner plus re-acceptance), `AtlasPolicyViewer`, `AtlasPolicyText`. `AtlasSignIn` shows the accept step itself. Documents are drawn natively from the server's sanitised HTML (`PolicyHtml`), not in a web view. All wording is overridable with `AtlasPolicyStrings`.
+
 ## 0.7.0 — 2026-10-24
 
 ### Added

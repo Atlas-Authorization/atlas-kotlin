@@ -48,6 +48,9 @@ class SignUpFlow internal constructor(private val client: AtlasClient) {
      * @param unsafeMetadata frontend-writable metadata to seed on the new user.
      * @param organizationId seat this self-signup into an organization's reader pool.
      * @param consent set when the instance requires agreeing to the legal terms.
+     * @param policyAcceptances the policies the user accepted
+     *   ([PolicyAcceptanceController.build]); an instance with required policies
+     *   answers 422 `POLICY_ACCEPTANCE_REQUIRED` without them.
      */
     suspend fun create(
         email: String,
@@ -56,6 +59,7 @@ class SignUpFlow internal constructor(private val client: AtlasClient) {
         unsafeMetadata: Map<String, JsonValue>? = null,
         organizationId: String? = null,
         consent: Boolean? = null,
+        policyAcceptances: List<PolicyAcceptance>? = null,
     ): FlowStep =
         post(
             "/v1/client/sign_ups",
@@ -70,8 +74,28 @@ class SignUpFlow internal constructor(private val client: AtlasClient) {
                 }
                 if (organizationId != null) put("organization_id", organizationId)
                 if (consent != null) put("consent", consent)
+                if (!policyAcceptances.isNullOrEmpty()) put("policy_acceptances", policyAcceptancesJson(policyAcceptances))
             },
         )
+
+    /**
+     * Continue an attempt the server holds at `needs_policy_acceptance`
+     * (`POST /v1/client/sign_ins/:id/accept_policies`). Send what
+     * [PolicyAcceptanceController.build] made; the proof is the attempt's one-time
+     * policy token. Returns the next step: usually [FlowStep.Done] (call [complete]),
+     * or [FlowStep.AcceptPolicies] again when a newer version was published meanwhile.
+     */
+    suspend fun acceptPolicies(acceptances: List<PolicyAcceptance>): FlowStep =
+        post(
+            "/v1/client/sign_ins/${attemptId()}/accept_policies",
+            acceptPoliciesBody(acceptances, attempt?.policyAcceptanceToken),
+        )
+
+    /** Seed the flow with an attempt handed over mid-stream (see [AtlasClient.resumeSignUp]). */
+    internal fun seed(seeded: FlowAttempt, response: AtlasClient.AtlasResponse? = null) {
+        attempt = seeded
+        last = response
+    }
 
     /** Send the email verification code (`prepare_verification`). */
     suspend fun prepareVerification(): FlowStep =

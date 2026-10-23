@@ -111,6 +111,8 @@ fun AtlasSignIn(
     var usingEmailCode by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // The policies a held attempt waits on (FlowStep.AcceptPolicies).
+    var policies by remember { mutableStateOf<PolicyAcceptanceController?>(null) }
     // Set once the server said the app can't send email: stop offering email codes.
     var emailUnavailable by remember { mutableStateOf(false) }
 
@@ -135,6 +137,10 @@ fun AtlasSignIn(
         scope.launch {
             try {
                 val next = block()
+                if (next is FlowStep.AcceptPolicies) {
+                    // Fill in the content the attempt only listed.
+                    policies = client.policyController(flow.attempt)
+                }
                 step = next
                 if (next is FlowStep.Done) {
                     onSignedIn(flow.complete())
@@ -249,6 +255,20 @@ fun AtlasSignIn(
                 field(code, { code = it }, "Authentication code", KeyboardType.Number)
                 primary("Verify", !busy && code.isNotBlank()) { run { flow.attemptSecondFactor(code.trim()) } }
             }
+
+            is FlowStep.AcceptPolicies -> policies?.let { controller ->
+                AtlasPolicyAcceptStep(
+                    controller = controller,
+                    enabled = !busy,
+                    onAccept = { acceptances -> run { flow.acceptPolicies(acceptances) } },
+                    onDecline = {
+                        // Declining abandons the held attempt: back to the first step, with the reason.
+                        val names = joinPolicyTitles(controller.policies.map { it.title }, "and")
+                        step = FlowStep.CollectIdentifier
+                        error = fillPolicyTemplate(AtlasPolicyStrings().declined, "policy" to names)
+                    },
+                )
+            } ?: caption("Loading\u2026")
 
             is FlowStep.Done -> caption("Signed in.")
 

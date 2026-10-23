@@ -42,18 +42,31 @@ class PasskeySignUpFlow(private val client: AtlasClient) {
         fields: Map<String, String>? = null,
         consent: Boolean? = null,
         captchaToken: String? = null,
+        policyAcceptances: List<PolicyAcceptance>? = null,
     ): FlowStep {
         val body = buildJsonObject {
             if (!email.isNullOrEmpty()) put("email", email)
             if (!username.isNullOrEmpty()) put("username", username)
             if (!fields.isNullOrEmpty()) putJsonObject("fields") { fields.forEach { (k, v) -> put(k, v) } }
             if (consent == true) put("consent", true)
+            if (!policyAcceptances.isNullOrEmpty()) put("policy_acceptances", policyAcceptancesJson(policyAcceptances))
             if (!captchaToken.isNullOrEmpty()) put("captcha_token", captchaToken)
         }
         val response = client.requestRaw("POST", "/v1/client/sign_ups/passkey", body.toString(), authenticated = false)
         pollSecret = client.decodeOrThrow(response.body, PollSecretEnvelope.serializer()).pollSecret
         return absorb(response)
     }
+
+    /** Continue an attempt held at `needs_policy_acceptance` (proof: the policy token, else this sign-up's poll secret). */
+    suspend fun acceptPolicies(acceptances: List<PolicyAcceptance>): FlowStep =
+        absorb(
+            client.requestRaw(
+                "POST",
+                "/v1/client/sign_ins/${attemptId()}/accept_policies",
+                acceptPoliciesBody(acceptances, attempt?.policyAcceptanceToken, pollSecret).toString(),
+                authenticated = false,
+            ),
+        )
 
     /** Submit the emailed verification code (when the instance requires a verified email). */
     suspend fun attemptVerification(code: String): FlowStep =

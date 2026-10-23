@@ -203,3 +203,26 @@ class GoogleSignInManager(
             GoogleSignInManager(client, CredentialManagerGoogleIdTokenProvider(CredentialManager.create(context)))
     }
 }
+
+/**
+ * Like [signInWithIdToken], but returns the [SignInFlow] holding the attempt
+ * instead of finishing it, so a native sign-in the server holds for a further
+ * step (`needs_policy_acceptance`, a second factor) can be continued with the
+ * flow's own methods. When the attempt is already `complete`, call
+ * [SignInFlow.complete].
+ */
+suspend fun AtlasClient.beginIdTokenSignIn(
+    provider: String,
+    idToken: String,
+    nonce: String? = null,
+): SignInFlow {
+    val response = requestRaw(
+        "POST",
+        "/v1/client/sign_ins/id_token",
+        idTokenBody(provider, idToken, nonce),
+        authenticated = false,
+    )
+    val flow = signInFlow()
+    flow.seed(decodeOrThrow(response.body, FlowAttempt.serializer()), response)
+    return flow
+}

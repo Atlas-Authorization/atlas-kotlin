@@ -2,6 +2,7 @@ package net.atlasauth.atlas
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * §5: "the client reads `status` and renders whatever the server demands next;
@@ -40,6 +41,10 @@ data class FlowAttempt(
     val ticket: String? = null,
     /** §5.6 the backup codes handed back exactly once, on MFA enrollment completion. */
     @SerialName("backup_codes") val backupCodes: List<String>? = null,
+    /** Present while the attempt is held at `needs_policy_acceptance`: the policies still to accept. */
+    @SerialName("pending_policies") val pendingPolicies: List<JsonObject>? = null,
+    /** The one-time proof that goes with `accept_policies`; returned once, with the held status. */
+    @SerialName("policy_acceptance_token") val policyAcceptanceToken: String? = null,
 ) {
     val isComplete: Boolean get() = status == "complete"
 }
@@ -68,6 +73,15 @@ sealed class FlowStep {
     /** Clear a CAPTCHA challenge before the attempt can be created (§15.4). */
     object CollectCaptcha : FlowStep()
 
+    /**
+     * The server holds the attempt until the user accepts [policies] (terms,
+     * privacy, a newer version of either). Show them with [AtlasPolicyAcceptStep]
+     * (or your own UI over a [PolicyAcceptanceController]) and send the result
+     * with `acceptPolicies`. Entries from the attempt carry no content; build the
+     * controller with [AtlasClient.policyController] to fill it in.
+     */
+    data class AcceptPolicies(val policies: List<AtlasPolicy>) : FlowStep()
+
     /** Await the OAuth redirect to come back (§6). */
     object AwaitOauthCallback : FlowStep()
 
@@ -92,6 +106,7 @@ fun nextStep(attempt: FlowAttempt): FlowStep = when (attempt.status) {
     "needs_mfa_enrollment" -> FlowStep.EnrollSecondFactor
     "needs_email_verification" -> FlowStep.CollectEmailCode
     "needs_captcha" -> FlowStep.CollectCaptcha
+    "needs_policy_acceptance" -> FlowStep.AcceptPolicies(pendingPoliciesOf(attempt))
     "needs_oauth_callback" -> FlowStep.AwaitOauthCallback
     "needs_new_password" -> FlowStep.CollectNewPassword
     "complete" -> FlowStep.Done(attempt.createdSessionId)

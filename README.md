@@ -331,6 +331,37 @@ reset.setNewPassword("…")
 if (reset.canComplete) reset.complete()        // when sign-in-after-reset is on
 ```
 
+## Policy acceptance (terms of service, privacy)
+
+When the app defines policies in the Atlas dashboard, sign-up must carry the user's acceptance and sign-in can be held until a newer version is accepted. The SDK covers both, with prebuilt Compose UI or a headless controller.
+
+```kotlin
+// Sign-up: show the policies, send what the user accepted.
+val policies = remember { mutableStateOf<PolicyAcceptanceController?>(null) }
+LaunchedEffect(Unit) { policies.value = atlas.signUpPolicyController() }
+policies.value?.let { c ->
+    AtlasPolicyConsent(c)            // checkbox + in-app document viewer
+    Button(enabled = c.canSubmit(), onClick = { /* run scroll dialogs, then: */
+        atlas.signUpFlow().create(email, password, policyAcceptances = c.build())
+    }) { Text("Create account") }
+    AtlasPolicyClickwrap(c, showViewer = false)  // "By continuing you agree to ..."
+}
+```
+
+`scroll` policies are read in an unskippable dialog: use `AtlasPolicyScrollHost(controller, active, onDone, onDecline)` when the user taps submit, and send the sign-up from `onDone`. If the server answers 422 `POLICY_ACCEPTANCE_REQUIRED` (a policy changed while the form was open), call `atlas.refreshPoliciesOnRequired(controller, error)`.
+
+A sign-in the server holds returns `FlowStep.AcceptPolicies`. `AtlasSignIn` shows the step for you; with the flow driver:
+
+```kotlin
+val step = flow.attemptPassword(password)
+if (step is FlowStep.AcceptPolicies) {
+    val controller = atlas.policyController(flow.attempt)   // fills in the content
+    // show AtlasPolicyAcceptStep(controller, onAccept = { flow.acceptPolicies(it) }, onDecline = { ... })
+}
+```
+
+A sign-in that comes back from a Custom Tab or web-auth redirect carries the proof in the URL: `AtlasRedirectResult.parse(url)` then `atlas.resumeSignIn(redirect)` gives a flow you can `acceptPolicies` on. For a signed-in user whose policies changed, put `AtlasPolicyGate(atlas)` on a screen: it draws the banner and the re-acceptance dialog.
+
 ## Jetpack Compose components
 
 New in **0.4.0**. Drop-in UI backed by the flow driver, the native peers of
