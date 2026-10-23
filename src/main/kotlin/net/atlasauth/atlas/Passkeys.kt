@@ -73,13 +73,40 @@ class PasskeyManager(
      * [AtlasException.Api] with `sign_in_not_complete`.
      *
      * @param activity an **Activity** context for the Credential Manager UI.
+     * @param captchaToken the sign-in captcha token, when the instance challenges
+     *   sign-ins. Without one such an instance answers 400 `CAPTCHA_REQUIRED`
+     *   ([AtlasException.isCaptchaRequired]): run the captcha and call again.
      * @throws AtlasException.Ceremony if the user cancels or the authenticator fails.
      */
-    suspend fun signInWithPasskey(activity: Context): AtlasUser {
-        val beginJson = client.postRaw("/v1/client/sign_ins/passkey/begin", emptyMap(), authenticated = false)
+    @JvmOverloads
+    suspend fun signInWithPasskey(activity: Context, captchaToken: String? = null): AtlasUser {
+        val beginJson = client.postRaw(
+            "/v1/client/sign_ins/passkey/begin",
+            passkeySignInBeginBody(captchaToken),
+            authenticated = false,
+        )
         val authenticationResponseJson = authenticator.getCredential(activity, beginJson)
         val body = toAssertionFinishBody(beginJson, authenticationResponseJson)
         return client.completePasskeySignIn(body)
+    }
+
+    /**
+     * Create the passkey for a passkey-only sign-up, and with it the account:
+     * `sign_ups/:id/passkey/begin` → Credential Manager `createCredential` →
+     * `…/finish`. Call once [PasskeySignUpFlow.awaitingPasskey] is true; on
+     * success the flow is complete — finish it with [PasskeySignUpFlow.complete].
+     */
+    @JvmOverloads
+    suspend fun createSignUpPasskey(activity: Context, flow: PasskeySignUpFlow, name: String? = null): FlowStep {
+        val (id, pollSecret) = flow.passkeyContext()
+        val beginJson = client.postRaw(
+            "/v1/client/sign_ups/$id/passkey/begin",
+            mapOf("poll_secret" to pollSecret),
+            authenticated = false,
+        )
+        val registrationResponseJson = authenticator.createCredential(activity, beginJson)
+        val body = toRegistrationFinishBody(beginJson, registrationResponseJson, name) + ("poll_secret" to pollSecret)
+        return flow.finish(body)
     }
 
     companion object {
@@ -175,6 +202,10 @@ private fun parseObject(label: String, raw: String): JsonObject = try {
  * base64url. The `challenge` is echoed from the server's options — the server
  * matched and stored it.
  */
+/** The passkey sign-in `begin` body: the captcha token when there is one. */
+internal fun passkeySignInBeginBody(captchaToken: String?): Map<String, String> =
+    if (captchaToken.isNullOrEmpty()) emptyMap() else mapOf("captcha_token" to captchaToken)
+
 internal fun toRegistrationFinishBody(
     beginJson: String,
     registrationResponseJson: String,

@@ -55,6 +55,30 @@ suspend fun AtlasClient.getOrganization(id: String): Organization {
     return decodeOrThrow(response.body, Organization.serializer())
 }
 
+/**
+ * One page of an organization's audit trail
+ * (`GET /v1/client/organizations/:id/audit_logs`), newest first. Needs the
+ * `org:sys_memberships:manage` permission (organization admins). [action]
+ * filters exactly, or by prefix when it ends in a dot (`member.`); page on with
+ * [OrganizationAuditLogPage.nextCursor] as [startingAfter].
+ */
+suspend fun AtlasClient.organizationAuditLog(
+    organizationId: String,
+    limit: Int? = null,
+    startingAfter: String? = null,
+    action: String? = null,
+): OrganizationAuditLogPage {
+    val enc = { v: String -> java.net.URLEncoder.encode(v, "UTF-8").replace("+", "%20") }
+    val query = listOfNotNull(
+        limit?.let { "limit=$it" },
+        startingAfter?.let { "starting_after=${enc(it)}" },
+        action?.let { "action=${enc(it)}" },
+    ).joinToString("&")
+    val path = "/v1/client/organizations/${enc(organizationId)}/audit_logs" + (if (query.isEmpty()) "" else "?$query")
+    val response = requestRaw("GET", path, null, authenticated = true)
+    return decodeOrThrow(response.body, OrganizationAuditLogPage.serializer())
+}
+
 /* ── sessions / devices ──────────────────────────────────────────────────────── */
 
 /** The signed-in user's active devices (`GET /v1/client/sessions`). */

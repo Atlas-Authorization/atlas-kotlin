@@ -68,6 +68,14 @@ class AtlasClient(
         encodeDefaults = true
     }
 
+    /**
+     * Supplies the stable device id sent on account-creating starts (see
+     * [DeviceId]). Defaults to an id stable for the process; set
+     * `DeviceId.persistent(context)` to keep it across launches, or return null to
+     * send none.
+     */
+    var deviceIdProvider: () -> String? = { DeviceId.forProcess() }
+
     private val jsonMediaType = "application/json".toMediaType()
     private val stringMapSerializer = MapSerializer(String.serializer(), String.serializer())
 
@@ -347,6 +355,7 @@ class AtlasClient(
         bodyJson: String?,
         cookie: String?,
     ): RawResponse = withContext(Dispatchers.IO) {
+        val stampedBody = DeviceId.stamp(json, method, path, bodyJson, deviceIdProvider)
         val url = baseUrl.resolve(path)
             ?: throw AtlasException.Transport("Could not build a request URL for $path.")
 
@@ -358,9 +367,9 @@ class AtlasClient(
         }
 
         val requestBody: RequestBody? = when {
-            bodyJson != null -> {
+            stampedBody != null -> {
                 builder.header("content-type", "application/json")
-                bodyJson.toRequestBody(jsonMediaType)
+                stampedBody.toRequestBody(jsonMediaType)
             }
             method != "GET" && method != "HEAD" -> ByteArray(0).toRequestBody(null)
             else -> null

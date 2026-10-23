@@ -2,6 +2,16 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.6.0 — 2026-10-23
+
+### Added
+
+- **Device id on account-creating starts.** Email sign-up and the social / SSO / id_token sign-in starts carry a random `device_id` (`DeviceId`) for the instance's accounts-per-device abuse limit, like the JS SDK. `AtlasClient.deviceIdProvider` defaults to an id stable for the process; set `DeviceId.persistent(context)` to keep it across launches.
+- **Passkey sign-in captcha.** `PasskeyManager.signInWithPasskey(activity, captchaToken)` forwards the sign-in captcha token; an instance that challenges sign-ins answers `CAPTCHA_REQUIRED` without one (`AtlasException.isCaptchaRequired`, `AtlasErrorCode.CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` / `CHALLENGE_UNAVAILABLE`).
+- **Passkey-only sign-up.** `PasskeySignUpFlow` (`start`, `attemptVerification`, `awaitingPasskey`, `complete`) and `PasskeyManager.createSignUpPasskey(activity, flow)` (begin → Credential Manager → finish). The account exists only once the passkey is registered.
+- **SMS MFA enrolment mid-sign-in.** `SignInFlow.prepareSmsMfaEnrollment(phone)` and `attemptSmsMfaEnrollment(factorId, code)`. `MfaEnrollment` carries `strategy`, `phone`, and for TOTP the QR image `qrCode` / `qrImageDataUrl`.
+- **Organization audit log.** `AtlasClient.organizationAuditLog(organizationId, limit, startingAfter, action)` (`GET /v1/client/organizations/:id/audit_logs`, organization admins).
+
 ## 0.5.0
 
 ### Added

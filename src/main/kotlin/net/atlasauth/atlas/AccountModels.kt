@@ -86,3 +86,31 @@ data class ExternalAccountConnection(
     @SerialName("authorization_url") val authorizationUrl: String,
     val scopes: List<String> = emptyList(),
 )
+
+/** Who acted, or what was acted on, in an organization audit entry. */
+@Serializable
+data class AuditParty(val type: String? = null, val id: String? = null)
+
+/** One entry of an organization's audit trail. */
+@Serializable
+data class OrganizationAuditLogEntry(
+    val id: String,
+    /** e.g. `member.role_changed`. */
+    val action: String,
+    val actor: AuditParty = AuditParty(),
+    val target: AuditParty = AuditParty(),
+    @SerialName("organization_id") val organizationId: String,
+    val ip: String? = null,
+    @SerialName("user_agent") val userAgent: String? = null,
+    val metadata: kotlinx.serialization.json.JsonObject? = null,
+    /** Epoch ms. */
+    @SerialName("created_at") val createdAt: Long,
+)
+
+/** One page of an organization's audit trail. */
+@Serializable
+data class OrganizationAuditLogPage(
+    val data: List<OrganizationAuditLogEntry> = emptyList(),
+    @SerialName("has_more") val hasMore: Boolean = false,
+    @SerialName("next_cursor") val nextCursor: String? = null,
+)

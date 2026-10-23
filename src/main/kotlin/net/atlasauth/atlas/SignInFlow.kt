@@ -156,15 +156,41 @@ class SignInFlow internal constructor(private val client: AtlasClient) {
      * [MfaEnrollment] (secret + provisioning URI, shown once); confirm it with the
      * authenticator's codes via [attemptMfaEnrollment].
      */
-    suspend fun prepareMfaEnrollment(): MfaEnrollment {
+    suspend fun prepareMfaEnrollment(): MfaEnrollment =
+        prepareMfaEnrollment(buildJsonObject { put("strategy", "totp") })
+
+    /**
+     * Start mid-sign-in SMS enrollment: the server registers [phone] (E.164) and
+     * texts it a code; confirm with [attemptSmsMfaEnrollment]. Offered only where
+     * the instance has the SMS factor on and can text.
+     */
+    suspend fun prepareSmsMfaEnrollment(phone: String): MfaEnrollment =
+        prepareMfaEnrollment(
+            buildJsonObject {
+                put("strategy", "phone_code")
+                put("phone", phone)
+            },
+        )
+
+    private suspend fun prepareMfaEnrollment(body: JsonObject): MfaEnrollment {
         val response = client.requestRaw(
             "POST",
             "/v1/client/sign_ins/${attemptId()}/prepare_mfa_enrollment",
-            "{}",
+            body.toString(),
             authenticated = false,
         )
         return client.decodeOrThrow(response.body, MfaEnrollment.serializer())
     }
+
+    /** Confirm an SMS enrollment with the texted [code]; completes the sign-in. */
+    suspend fun attemptSmsMfaEnrollment(factorId: String, code: String): FlowStep =
+        post(
+            "/v1/client/sign_ins/${attemptId()}/attempt_mfa_enrollment",
+            buildJsonObject {
+                put("factor_id", factorId)
+                put("code", code)
+            },
+        )
 
     /**
      * Confirm TOTP enrollment with one or more consecutive authenticator codes

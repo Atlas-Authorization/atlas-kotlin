@@ -131,6 +131,17 @@ data class SecondFactorChallenge(
 @Serializable
 data class MfaEnrollment(
     @SerialName("factor_id") val factorId: String,
-    val secret: String,
-    val uri: String,
-)
+    /** totp: the setup key (shown once); empty for a texted factor. */
+    val secret: String = "",
+    /** totp: the `otpauth://` provisioning URI; empty for a texted factor. */
+    val uri: String = "",
+    /** `totp` or `phone_code`. */
+    val strategy: String = "totp",
+    /** totp: the URI as a QR image, a `data:image/...` URL (see [qrImageDataUrl]). */
+    @SerialName("qr_code") val qrCode: String? = null,
+    /** phone_code: the (masked) number the code was texted to. */
+    val phone: String? = null,
+) {
+    /** [qrCode] when it is an image data URL a view can render safely, else null. */
+    val qrImageDataUrl: String? get() = qrCode?.takeIf { it.startsWith("data:image/") }
+}

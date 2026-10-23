@@ -486,6 +486,9 @@ object AtlasProviderNames {
         "github" to "GitHub", "gitlab" to "GitLab", "linkedin" to "LinkedIn", "linkedin_oidc" to "LinkedIn",
         "x" to "X", "twitter" to "X", "tiktok" to "TikTok", "hubspot" to "HubSpot",
         "huggingface" to "Hugging Face",
+        "cognito" to "AWS Cognito",
+        "paybin" to "Paybin",
+        "railway" to "Railway",
     )
 
     fun name(id: String): String = KNOWN[id] ?: id.split('_', '-')
