@@ -76,6 +76,15 @@ class AtlasClient(
      */
     var deviceIdProvider: () -> String? = { DeviceId.forProcess() }
 
+    /**
+     * Opens the upstream logout URL [signOut] hands back — the upstream OIDC
+     * provider's end-session URL, or the SAML Single Logout start URL — so the
+     * user is signed out there too. [create] sets it to open the system browser;
+     * null (the default for a hand-built client) only returns the URL in the
+     * [SignOutResult].
+     */
+    var logoutUrlOpener: ((String) -> Unit)? = null
+
     private val jsonMediaType = "application/json".toMediaType()
     private val stringMapSerializer = MapSerializer(String.serializer(), String.serializer())
 
@@ -247,18 +256,32 @@ class AtlasClient(
      * (`POST /v1/client/sessions/:id/revoke`) and clear local storage. Local
      * state is cleared even if the network call fails — a client that keeps a
      * token after the user tapped "sign out" is the worse failure.
+     *
+     * When the session came from an upstream OIDC provider set to RP-initiated
+     * logout, or a SAML connection with Single Logout, Atlas answers with the URL
+     * that signs the user out there too ([SignOutResult.upstreamLogoutUrl] /
+     * [SignOutResult.samlLogoutUrl], https only). With [followLogoutUrl] (the
+     * default) it is handed to [logoutUrlOpener] — the system browser for a
+     * client built with [create].
+     *
+     * @param returnUrl where the upstream sends the browser back; must be on one
+     *   of the instance's allowed origins.
      */
-    suspend fun signOut() {
+    @JvmOverloads
+    suspend fun signOut(returnUrl: String? = null, followLogoutUrl: Boolean = true): SignOutResult {
         val stored = tokenStore.load()
+        var result = SignOutResult()
         try {
             if (stored != null) {
                 try {
-                    send(
+                    val body = returnUrl?.let { json.encodeToString(stringMapSerializer, mapOf("return_url" to it, "redirect_url" to it)) }
+                    val response = sendRaw(
                         method = "POST",
                         path = "/v1/client/sessions/${stored.sessionId}/revoke",
-                        body = null,
+                        bodyJson = body,
                         cookie = cookieHeader(stored),
                     )
+                    if (response.status in 200..299) result = SignOutResult.fromResponse(json, response.body)
                 } catch (_: AtlasException) {
                     // Best-effort revoke; local clear below is what matters.
                 }
@@ -266,6 +289,9 @@ class AtlasClient(
         } finally {
             tokenStore.clear()
         }
+        val url = result.logoutUrl
+        if (followLogoutUrl && url != null) logoutUrlOpener?.invoke(url)
+        return result
     }
 
     /**
@@ -512,7 +538,18 @@ class AtlasClient(
             frontendApi = frontendApi,
             tokenStore = EncryptedSharedPreferencesTokenStore(context, publishableKey),
             httpClient = httpClient,
-        )
+        ).apply {
+            val appContext = context.applicationContext
+            logoutUrlOpener = { url -> openInSystemBrowser(appContext, url) }
+        }
+
+        /** Open [url] in the system browser (a new task, so any context works). */
+        @JvmStatic
+        fun openInSystemBrowser(context: Context, url: String) {
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { context.startActivity(intent) }
+        }
 
         internal fun resolveBaseUrl(frontendApi: String): HttpUrl {
             val trimmed = frontendApi.trim()

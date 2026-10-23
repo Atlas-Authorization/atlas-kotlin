@@ -54,9 +54,15 @@ class PasskeyManager(
      * @throws AtlasException.Api on a server rejection.
      */
     @JvmOverloads
-    suspend fun registerPasskey(activity: Context, name: String? = null) {
+    suspend fun registerPasskey(
+        activity: Context,
+        name: String? = null,
+        prf: PasskeyPrf? = null,
+        onPrfResult: ((PasskeyPrfResult) -> Unit)? = null,
+    ) {
         val beginJson = client.postRaw("/v1/client/me/passkeys/begin", emptyMap(), authenticated = true)
-        val registrationResponseJson = authenticator.createCredential(activity, beginJson)
+        val registrationResponseJson = authenticator.createCredential(activity, withPrfExtension(beginJson, prf, registration = true))
+        deliverPrf(prf, registrationResponseJson, onPrfResult)
         val body = toRegistrationFinishBody(beginJson, registrationResponseJson, name)
         client.postRaw("/v1/client/me/passkeys/finish", body, authenticated = true)
     }
@@ -79,13 +85,19 @@ class PasskeyManager(
      * @throws AtlasException.Ceremony if the user cancels or the authenticator fails.
      */
     @JvmOverloads
-    suspend fun signInWithPasskey(activity: Context, captchaToken: String? = null): AtlasUser {
+    suspend fun signInWithPasskey(
+        activity: Context,
+        captchaToken: String? = null,
+        prf: PasskeyPrf? = null,
+        onPrfResult: ((PasskeyPrfResult) -> Unit)? = null,
+    ): AtlasUser {
         val beginJson = client.postRaw(
             "/v1/client/sign_ins/passkey/begin",
             passkeySignInBeginBody(captchaToken),
             authenticated = false,
         )
-        val authenticationResponseJson = authenticator.getCredential(activity, beginJson)
+        val authenticationResponseJson = authenticator.getCredential(activity, withPrfExtension(beginJson, prf, registration = false))
+        deliverPrf(prf, authenticationResponseJson, onPrfResult)
         val body = toAssertionFinishBody(beginJson, authenticationResponseJson)
         return client.completePasskeySignIn(body)
     }
@@ -97,16 +109,29 @@ class PasskeyManager(
      * success the flow is complete — finish it with [PasskeySignUpFlow.complete].
      */
     @JvmOverloads
-    suspend fun createSignUpPasskey(activity: Context, flow: PasskeySignUpFlow, name: String? = null): FlowStep {
+    suspend fun createSignUpPasskey(
+        activity: Context,
+        flow: PasskeySignUpFlow,
+        name: String? = null,
+        prf: PasskeyPrf? = null,
+        onPrfResult: ((PasskeyPrfResult) -> Unit)? = null,
+    ): FlowStep {
         val (id, pollSecret) = flow.passkeyContext()
         val beginJson = client.postRaw(
             "/v1/client/sign_ups/$id/passkey/begin",
             mapOf("poll_secret" to pollSecret),
             authenticated = false,
         )
-        val registrationResponseJson = authenticator.createCredential(activity, beginJson)
+        val registrationResponseJson = authenticator.createCredential(activity, withPrfExtension(beginJson, prf, registration = true))
+        deliverPrf(prf, registrationResponseJson, onPrfResult)
         val body = toRegistrationFinishBody(beginJson, registrationResponseJson, name) + ("poll_secret" to pollSecret)
         return flow.finish(body)
+    }
+
+    /** The PRF outputs reach only the app, right after the ceremony; they are never sent to Atlas. */
+    private fun deliverPrf(prf: PasskeyPrf?, responseJson: String, onPrfResult: ((PasskeyPrfResult) -> Unit)?) {
+        if (prf == null || onPrfResult == null) return
+        readPrfResult(responseJson)?.let(onPrfResult)
     }
 
     companion object {
@@ -266,4 +291,96 @@ internal fun toAssertionFinishBody(
     // (rather than invent one) when the server did not issue one.
     begin.string("handle")?.let { body["handle"] = it }
     return body
+}
+
+
+/* ── passkey PRF (WebAuthn `prf` extension) pass-through ───────────────────── */
+
+/**
+ * Ask the authenticator for PRF outputs (the WebAuthn `prf` extension) during a
+ * passkey ceremony — e.g. to derive a client-side encryption key that only this
+ * passkey can unlock. The salts never leave the device in the clear and the
+ * outputs reach only your `onPrfResult` callback: nothing PRF-related is sent to
+ * Atlas.
+ *
+ * Credential Manager passes the extension through to the provider; providers
+ * that support PRF (Google Password Manager on recent Android, and others)
+ * return results, others return none — [PasskeyPrfResult.enabled] /
+ * [PasskeyPrfResult.first] are then null.
+ *
+ * @param first the first salt (bytes).
+ * @param second an optional second salt (for key rotation).
+ * @param evalByCredential per-credential salts for a sign-in (base64url
+ *   credential id → salts); used instead of [first]/[second] for that credential.
+ */
+class PasskeyPrf @JvmOverloads constructor(
+    val first: ByteArray,
+    val second: ByteArray? = null,
+    val evalByCredential: Map<String, Pair<ByteArray, ByteArray?>> = emptyMap(),
+) {
+    companion object {
+        /** Salts given as strings are encoded as UTF-8 (the same rule as the web SDK). */
+        @JvmStatic
+        @JvmOverloads
+        fun ofSalt(first: String, second: String? = null): PasskeyPrf =
+            PasskeyPrf(first.toByteArray(Charsets.UTF_8), second?.toByteArray(Charsets.UTF_8))
+    }
+}
+
+/**
+ * The PRF outputs of a ceremony. [enabled] is reported on registration (whether
+ * the new passkey supports PRF); [first] / [second] are the 32-byte outputs for
+ * the salts, when the authenticator evaluated them.
+ */
+class PasskeyPrfResult(
+    val credentialId: String?,
+    val enabled: Boolean?,
+    val first: ByteArray?,
+    val second: ByteArray?,
+)
+
+private fun b64url(bytes: ByteArray): String =
+    java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+private fun b64urlDecode(value: String): ByteArray? =
+    runCatching { java.util.Base64.getUrlDecoder().decode(value.trimEnd('=')) }.getOrNull()
+
+/**
+ * Add the WebAuthn `prf` extension to a ceremony's options JSON: `eval` on both
+ * registration and sign-in, plus `evalByCredential` on sign-in. Returns the JSON
+ * unchanged when [prf] is null.
+ */
+internal fun withPrfExtension(requestJson: String, prf: PasskeyPrf?, registration: Boolean): String {
+    if (prf == null) return requestJson
+    val options = parseObject("passkey begin", requestJson)
+    fun salts(first: ByteArray, second: ByteArray?) = kotlinx.serialization.json.buildJsonObject {
+        put("first", kotlinx.serialization.json.JsonPrimitive(b64url(first)))
+        if (second != null) put("second", kotlinx.serialization.json.JsonPrimitive(b64url(second)))
+    }
+    val prfObject = kotlinx.serialization.json.buildJsonObject {
+        put("eval", salts(prf.first, prf.second))
+        if (!registration && prf.evalByCredential.isNotEmpty()) {
+            put(
+                "evalByCredential",
+                kotlinx.serialization.json.buildJsonObject {
+                    prf.evalByCredential.forEach { (id, s) -> put(id, salts(s.first, s.second)) }
+                },
+            )
+        }
+    }
+    val existing = options["extensions"] as? JsonObject ?: JsonObject(emptyMap())
+    val extensions = JsonObject(existing + ("prf" to prfObject))
+    return JsonObject(options + ("extensions" to extensions)).toString()
+}
+
+/** Read the `prf` client-extension results from a ceremony's response JSON. */
+internal fun readPrfResult(responseJson: String): PasskeyPrfResult? {
+    val response = runCatching { mappingJson.parseToJsonElement(responseJson).jsonObject }.getOrNull() ?: return null
+    val ext = response["clientExtensionResults"] as? JsonObject ?: return null
+    val prf = ext["prf"] as? JsonObject ?: return null
+    val enabled = (prf["enabled"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
+    val results = prf["results"] as? JsonObject
+    val first = results?.string("first")?.let(::b64urlDecode)
+    val second = results?.string("second")?.let(::b64urlDecode)
+    return PasskeyPrfResult(response.string("rawId") ?: response.string("id"), enabled, first, second)
 }

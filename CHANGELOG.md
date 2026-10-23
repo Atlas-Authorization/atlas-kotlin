@@ -2,6 +2,18 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.7.0 — 2026-10-24
+
+### Added
+
+- **Upstream logout on sign-out.** `signOut(returnUrl, followLogoutUrl)` now returns a `SignOutResult` with the upstream OIDC provider's `upstreamLogoutUrl` and the SAML `samlLogoutUrl` (https only) that Atlas hands back when the session came from such a provider. By default the URL is opened through `AtlasClient.logoutUrlOpener` — the system browser for a client built with `AtlasClient.create(context, ...)` (`AtlasClient.openInSystemBrowser`). `returnUrl` must be on an allowed origin.
+- **Device sign-in approval.** `lookupDeviceAuthorization(userCode)`, `approveDeviceAuthorization`, `denyDeviceAuthorization` (`DeviceAuthorization`) let a signed-in phone approve the code a TV, watch or CLI shows; `formatUserCode`, `userCodeFromUrl` (for a scanned QR code). A refusal needing a fresh re-authentication is `AtlasException.Api` with code `STEP_UP_REQUIRED`.
+- **Passkey PRF pass-through.** `registerPasskey`, `signInWithPasskey` and `createSignUpPasskey` take `prf: PasskeyPrf` (salts as bytes, or `PasskeyPrf.ofSalt("...")` as UTF-8; per-credential salts on sign-in) and `onPrfResult`. The `prf` extension is passed to Credential Manager and the outputs (`PasskeyPrfResult`) reach only the callback — nothing PRF-related is sent to Atlas. Providers without PRF support return no results.
+
+### Changed
+
+- `signOut()` returns `SignOutResult` instead of `Unit` (existing calls compile unchanged).
+
 ## 0.6.0 — 2026-10-23
 
 ### Added

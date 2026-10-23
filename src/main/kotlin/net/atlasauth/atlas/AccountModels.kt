@@ -114,3 +114,68 @@ data class OrganizationAuditLogPage(
     @SerialName("has_more") val hasMore: Boolean = false,
     @SerialName("next_cursor") val nextCursor: String? = null,
 )
+
+/**
+ * What a sign-out hands back for signing out of the upstream identity provider
+ * too: the upstream OIDC provider's end-session URL, and the SAML Single Logout
+ * start URL. Only `https` URLs are kept. Open [logoutUrl] in the system browser.
+ */
+data class SignOutResult(
+    val upstreamLogoutUrl: String? = null,
+    val samlLogoutUrl: String? = null,
+) {
+    /** The URL to open: the SAML one, else the upstream OIDC one. */
+    val logoutUrl: String? get() = samlLogoutUrl ?: upstreamLogoutUrl
+
+    companion object {
+        internal fun fromResponse(json: kotlinx.serialization.json.Json, body: String): SignOutResult {
+            val obj = runCatching { json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject }.getOrNull()
+                ?: return SignOutResult()
+            val root = (obj["response"] as? kotlinx.serialization.json.JsonObject) ?: obj
+            fun https(key: String): String? {
+                val v = (root[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                    ?: (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                return v?.takeIf { it.startsWith("https://") }
+            }
+            return SignOutResult(https("upstream_logout_url"), https("saml_logout_url"))
+        }
+    }
+}
+
+/** One requested scope of a [DeviceAuthorization], with a human description. */
+@Serializable
+data class DeviceAuthorizationScope(
+    val scope: String,
+    val description: String = "",
+)
+
+/** The client (the TV, console or CLI app) asking to sign in. */
+@Serializable
+data class DeviceAuthorizationClient(
+    @SerialName("client_id") val clientId: String = "",
+    val name: String = "",
+    @SerialName("logo_url") val logoUrl: String? = null,
+    @SerialName("homepage_url") val homepageUrl: String? = null,
+    @SerialName("first_party") val firstParty: Boolean = false,
+)
+
+/**
+ * A pending device sign-in (OAuth 2.0 Device Authorization Grant): the code a TV,
+ * watch or CLI shows, which the signed-in user approves from this app.
+ */
+@Serializable
+data class DeviceAuthorization(
+    val id: String,
+    /** The code as the device shows it (`XXXX-XXXX`). */
+    @SerialName("user_code") val userCode: String,
+    /** `pending`, `approved` or `denied`. */
+    val status: String = "pending",
+    val client: DeviceAuthorizationClient = DeviceAuthorizationClient(),
+    val scopes: List<DeviceAuthorizationScope> = emptyList(),
+    /** The API the device asked a token for, if any. */
+    val audience: String? = null,
+    /** Approving needs a recent re-authentication. */
+    @SerialName("requires_step_up") val requiresStepUp: Boolean = false,
+    @SerialName("created_at") val createdAt: Long = 0,
+    @SerialName("expires_at") val expiresAt: Long = 0,
+)

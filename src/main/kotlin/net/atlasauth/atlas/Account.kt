@@ -222,3 +222,59 @@ suspend fun AtlasClient.setPassword(password: String) {
         authenticated = true,
     )
 }
+
+/* ── device sign-in approval (RFC 8628) ─────────────────────────────────────── */
+
+/**
+ * Normalise what a person typed into the `XXXX-XXXX` form devices show:
+ * uppercase, spaces and dashes ignored. Returns the trimmed input unchanged when
+ * it is not 8 letters or digits, so the server answers "not valid".
+ */
+fun formatUserCode(input: String): String {
+    val cleaned = input.uppercase().filter { it in 'A'..'Z' || it in '0'..'9' }
+    return if (cleaned.length == 8) "${cleaned.take(4)}-${cleaned.drop(4)}" else input.trim()
+}
+
+/** The `user_code` of a verification URL a device displayed (`?user_code=`), formatted; null when none. */
+fun userCodeFromUrl(url: String): String? {
+    val query = url.substringAfter("://", "").substringAfter('?', "").substringBefore('#')
+    if (query.isEmpty()) return null
+    val raw = query.split('&').firstOrNull { it.startsWith("user_code=") }?.substringAfter('=') ?: return null
+    val value = java.net.URLDecoder.decode(raw, "UTF-8")
+    return if (value.isEmpty()) null else formatUserCode(value)
+}
+
+/**
+ * Look up a pending device sign-in by the code a TV, watch or CLI shows
+ * (`POST /v1/client/me/device_authorizations/lookup`) — e.g. typed in, or read
+ * from its QR code with [userCodeFromUrl]. Show [DeviceAuthorization.client] and
+ * [DeviceAuthorization.scopes], then approve or deny.
+ */
+suspend fun AtlasClient.lookupDeviceAuthorization(userCode: String): DeviceAuthorization {
+    val body = buildJsonObject { put("user_code", formatUserCode(userCode)) }.toString()
+    val response = requestRaw("POST", "/v1/client/me/device_authorizations/lookup", body, authenticated = true)
+    return decodeOrThrow(response.body, DeviceAuthorization.serializer())
+}
+
+/**
+ * Approve the device sign-in for the signed-in user; the device's next poll
+ * receives its tokens. When the application requires a recent re-authentication
+ * this throws [AtlasException.Api] with code `STEP_UP_REQUIRED` — re-authenticate,
+ * then approve again.
+ */
+suspend fun AtlasClient.approveDeviceAuthorization(authorization: DeviceAuthorization): DeviceAuthorization =
+    decideDeviceAuthorization(authorization, "approve")
+
+/** Deny the device sign-in; the device's next poll is told `access_denied`. */
+suspend fun AtlasClient.denyDeviceAuthorization(authorization: DeviceAuthorization): DeviceAuthorization =
+    decideDeviceAuthorization(authorization, "deny")
+
+private suspend fun AtlasClient.decideDeviceAuthorization(
+    authorization: DeviceAuthorization,
+    decision: String,
+): DeviceAuthorization {
+    val id = java.net.URLEncoder.encode(authorization.id, "UTF-8")
+    val body = buildJsonObject { put("user_code", authorization.userCode) }.toString()
+    val response = requestRaw("POST", "/v1/client/me/device_authorizations/$id/$decision", body, authenticated = true)
+    return decodeOrThrow(response.body, DeviceAuthorization.serializer())
+}
