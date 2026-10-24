@@ -380,6 +380,7 @@ class AtlasClient(
         path: String,
         bodyJson: String?,
         cookie: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): RawResponse = withContext(Dispatchers.IO) {
         val stampedBody = DeviceId.stamp(json, method, path, bodyJson, deviceIdProvider)
         val url = baseUrl.resolve(path)
@@ -390,6 +391,9 @@ class AtlasClient(
             .header("x-publishable-key", publishableKey)
         if (cookie != null) {
             builder.header("Cookie", cookie)
+        }
+        for ((name, value) in extraHeaders) {
+            builder.header(name, value)
         }
 
         val requestBody: RequestBody? = when {
@@ -433,6 +437,7 @@ class AtlasClient(
         path: String,
         bodyJson: String?,
         authenticated: Boolean,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): AtlasResponse {
         val cookie = if (authenticated) {
             val stored = tokenStore.load() ?: throw AtlasException.NotSignedIn
@@ -440,7 +445,7 @@ class AtlasClient(
         } else {
             null
         }
-        val response = sendRaw(method, path, bodyJson, cookie)
+        val response = sendRaw(method, path, bodyJson, cookie, extraHeaders)
         throwIfError(response)
         return AtlasResponse(body = response.body, setCookies = response.setCookies)
     }

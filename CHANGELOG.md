@@ -2,6 +2,16 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.9.0 — 2026-10-24
+
+### Added
+
+- **`getToken({for})` for integrations.** ``AtlasClient.getToken(integration, spaceId)`` mints a short-lived token for a configured identity integration (a preset such as `chatly`, `forumulate`, `cookiemunch`, `referalli`, or a custom id) from the signed-in session; `null` when the integration is not enabled. Forumulate takes a `spaceId` and returns the redeem fields. ``AtlasClient.getAtlasIdToken(integration, accessToken, origin, dpopProof)`` is the Sign in with Atlas browser-token route (`POST /v1/client/integrations/:id/atlas_id_tokens`): Bearer or DPoP access token, an `Origin` the Sign in with Atlas app allows, no cookies.
+- **OIDC claims.** `OidcClaims` reads `org_id`, `org_slug`, `org_role`, `org_permissions`, `orgs` and the `sso_connection_id` / `sso_tenant_id` / `sso_issuer` / `sso_domain` claims from userinfo, introspection or a JWT payload (the JWT form does not verify the signature). `AtlasScopes.organizations` / `withOrganizations(...)` add the `organizations` scope to a scope list such as the device sign-in's.
+- **New error codes.** `INSUFFICIENT_SCOPE` (the old `SCOPE_MISSING` still reads as it; `requiredScope` reads `meta.required_scope`), `ORIGIN_NOT_ALLOWED`, `STEP_UP_REQUIRED`, `ROUTE_NOT_FOUND` (`didYouMean`, `allowedMethods`). Error items now carry `meta` and `docs_url`.
+- **Key format.** The client SDKs check no key prefix; they send whatever publishable key they are given (`pk_...` or `atlas_<env>_pk_...`).
+- FedCM / One Tap: not applicable to a native SDK (browser-only). Native Google sign-in keeps using the existing id_token route.
+
 ## 0.8.0 — 2026-10-24
 
 ### Added

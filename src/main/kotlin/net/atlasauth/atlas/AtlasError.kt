@@ -1,7 +1,11 @@
 package net.atlasauth.atlas
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * One item of the §9.1 error envelope: `{ errors: [{ code, message, param?, meta? }] }`.
@@ -15,6 +19,14 @@ data class AtlasErrorItem(
     val code: String,
     val message: String,
     val param: String? = null,
+    /** Structured detail some errors carry (e.g. `meta.required_scope` on `INSUFFICIENT_SCOPE`). */
+    val meta: JsonObject? = null,
+    /** `ROUTE_NOT_FOUND` only: the closest documented paths. */
+    @SerialName("did_you_mean") val didYouMean: List<String>? = null,
+    /** `ROUTE_NOT_FOUND` only: the methods the path does support. */
+    @SerialName("allowed_methods") val allowedMethods: List<String>? = null,
+    /** Where the error code is documented (`https://atlasauth.net/errors/<code>`). */
+    @SerialName("docs_url") val docsUrl: String? = null,
 )
 
 /**
@@ -83,6 +95,40 @@ sealed class AtlasException(message: String) : Exception(message) {
      */
     val isCaptchaRequired: Boolean
         get() = knownCode == AtlasErrorCode.CAPTCHA_REQUIRED || knownCode == AtlasErrorCode.CAPTCHA_FAILED
+
+    /**
+     * 403 `INSUFFICIENT_SCOPE`: the key or token lacks a scope. The older
+     * `SCOPE_MISSING` spelling is still tolerated. [requiredScope] names the scope.
+     */
+    val isInsufficientScope: Boolean
+        get() = knownCode == AtlasErrorCode.INSUFFICIENT_SCOPE || knownCode == AtlasErrorCode.SCOPE_MISSING
+
+    /** The scope an `INSUFFICIENT_SCOPE` refusal asks for (`meta.required_scope`); null otherwise. */
+    val requiredScope: String?
+        get() = (this as? Api)?.errors?.firstOrNull { it.meta?.get("required_scope") != null }
+            ?.meta?.get("required_scope")?.jsonPrimitive?.contentOrNull
+
+    /** 403 `STEP_UP_REQUIRED`: a recent re-authentication (MFA) is needed; run it and retry. */
+    val isStepUpRequired: Boolean
+        get() = knownCode == AtlasErrorCode.STEP_UP_REQUIRED
+
+    /** 403 `ORIGIN_NOT_ALLOWED`: the request came from an origin the key or app does not allow. */
+    val isOriginNotAllowed: Boolean
+        get() = knownCode == AtlasErrorCode.ORIGIN_NOT_ALLOWED
+
+    /** 404 `ROUTE_NOT_FOUND`: no such method + path (a missing object is `NOT_FOUND`). */
+    val isRouteNotFound: Boolean
+        get() = knownCode == AtlasErrorCode.ROUTE_NOT_FOUND
+
+    /** `ROUTE_NOT_FOUND`: the closest documented paths; empty for any other error. */
+    val didYouMean: List<String>
+        get() = (this as? Api)?.errors?.firstOrNull { it.code == AtlasErrorCode.ROUTE_NOT_FOUND.wire }
+            ?.didYouMean.orEmpty()
+
+    /** `ROUTE_NOT_FOUND`: the methods the path does support; empty for any other error. */
+    val allowedMethods: List<String>
+        get() = (this as? Api)?.errors?.firstOrNull { it.code == AtlasErrorCode.ROUTE_NOT_FOUND.wire }
+            ?.allowedMethods.orEmpty()
 }
 
 /**
@@ -119,6 +165,21 @@ enum class AtlasErrorCode(val wire: String) {
 
     /** 403 — the step needs a challenge but no captcha provider is configured. */
     CHALLENGE_UNAVAILABLE("CHALLENGE_UNAVAILABLE"),
+
+    /** 403 — the key or token lacks a scope; `meta.required_scope` names it. */
+    INSUFFICIENT_SCOPE("INSUFFICIENT_SCOPE"),
+
+    /** The pre-2026-10 spelling of [INSUFFICIENT_SCOPE]; still tolerated. */
+    SCOPE_MISSING("SCOPE_MISSING"),
+
+    /** 403 — the request origin is not one the key or app allows. */
+    ORIGIN_NOT_ALLOWED("ORIGIN_NOT_ALLOWED"),
+
+    /** 403 — a recent MFA / re-authentication is required first. */
+    STEP_UP_REQUIRED("STEP_UP_REQUIRED"),
+
+    /** 404 — no such method + path; carries `did_you_mean` / `allowed_methods`. */
+    ROUTE_NOT_FOUND("ROUTE_NOT_FOUND"),
     ;
 
     companion object {
