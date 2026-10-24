@@ -2,6 +2,12 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.10.0 — 2026-10-24
+
+### Added
+
+- **SSO claims.** `OidcClaims.ssoOrganizationId` / `ssoConnectionType` read the `sso_organization_id` (the Atlas organization that owns the enterprise SSO connection, independent of `org_id`) and `sso_connection_type` (`saml` or `oidc`) claims from userinfo, introspection, an ID or access token, or a JWT payload. Both are absent on a non-SSO sign-in; an instance-wide connection carries the type but no organization.
+
 ## 0.9.0 — 2026-10-24
 
 ### Added

@@ -145,7 +145,7 @@ class IntegrationsTest {
         val claims = json.parseToJsonElement(
             """{"org_id":"org_1","org_slug":"acme","org_role":"admin","org_permissions":["a:b","c:d"],
                "orgs":[{"id":"org_1","slug":"acme","role":"admin"},{"id":"org_2","slug":"b","role":"member"},{"slug":"skipped"}],
-               "sso_connection_id":"sso_9","sso_tenant_id":"tid","sso_issuer":"https://login.example","sso_domain":"acme.com"}""",
+               "sso_connection_id":"sso_9","sso_tenant_id":"tid","sso_issuer":"https://login.example","sso_domain":"acme.com","sso_organization_id":"org_7","sso_connection_type":"saml"}""",
         ) as JsonObject
         val c = OidcClaims.fromClaims(claims)
         assertEquals("org_1", c.orgId)
@@ -155,9 +155,13 @@ class IntegrationsTest {
         assertEquals("member", c.orgs[1].role)
         assertEquals("sso_9", c.sso?.connectionId)
         assertEquals("acme.com", c.sso?.domain)
+        assertEquals("org_7", c.ssoOrganizationId)
+        assertEquals("saml", c.ssoConnectionType)
         val none = OidcClaims.fromClaims(json.parseToJsonElement("""{"sub":"u"}""") as JsonObject)
         assertNull(none.orgId)
         assertNull(none.sso)
+        assertNull(none.ssoOrganizationId)
+        assertNull(none.ssoConnectionType)
         assertTrue(none.orgs.isEmpty())
     }
 

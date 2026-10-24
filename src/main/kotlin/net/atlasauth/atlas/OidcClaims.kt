@@ -53,6 +53,10 @@ data class OidcClaims(
     val orgPermissions: List<String> = emptyList(),
     val orgs: List<OidcOrganization> = emptyList(),
     val sso: OidcSso? = null,
+    /** `sso_organization_id`: the Atlas organization that owns the SSO connection (independent of `org_id`). */
+    val ssoOrganizationId: String? = null,
+    /** `sso_connection_type`: `saml` or `oidc`; absent on a non-SSO sign-in. */
+    val ssoConnectionType: String? = null,
 ) {
     companion object {
         private fun JsonObject.str(key: String): String? =
@@ -78,6 +82,8 @@ data class OidcClaims(
                 orgPermissions = permissions,
                 orgs = orgs,
                 sso = sso,
+                ssoOrganizationId = claims.str("sso_organization_id"),
+                ssoConnectionType = claims.str("sso_connection_type"),
             )
         }
 
