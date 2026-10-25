@@ -44,6 +44,24 @@ data class AtlasIdIntegrationToken(
 
 private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
+/** The query string for a per-call audience (and any extra parameters): `?a=b&...`, or empty. */
+internal fun integrationQuery(
+    spaceId: String? = null,
+    cbid: String? = null,
+    audience: String? = null,
+    audienceParams: Map<String, String> = emptyMap(),
+): String {
+    val parts = ArrayList<String>()
+    if (!spaceId.isNullOrEmpty()) parts.add("space_id=${enc(spaceId)}")
+    for (key in audienceParams.keys.sorted()) {
+        val value = audienceParams[key]
+        if (!value.isNullOrEmpty()) parts.add("${enc(key)}=${enc(value)}")
+    }
+    if (!cbid.isNullOrEmpty()) parts.add("cbid=${enc(cbid)}")
+    if (!audience.isNullOrEmpty()) parts.add("audience=${enc(audience)}")
+    return if (parts.isEmpty()) "" else "?" + parts.joinToString("&")
+}
+
 /**
  * `getToken({ for })` for the signed-in session
  * (`POST /v1/client/sessions/:id/integration_tokens/:integration`): a short-lived
@@ -55,11 +73,23 @@ private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8").repla
  *
  * @param integration the integration id (a preset such as `chatly`, or a custom id).
  * @param spaceId Forumulate preset only: the space to mint the reader token for.
+ * @param cbid the per-call audience value for an integration whose `per_call_audience` is keyed on `cbid`.
+ * @param audience the full audience to request; it must match the integration's per-call audience template or allow-list.
+ * @param audienceParams extra named values for a per-call audience template (for example `mapOf("tenant" to "t2")`).
+ *
+ * An integration with a per-call audience mints a token only when the call supplies
+ * a matching value; otherwise no token is minted.
  * @throws AtlasException.NotSignedIn when there is no stored session.
  */
-suspend fun AtlasClient.getToken(integration: String, spaceId: String? = null): IntegrationToken? {
+suspend fun AtlasClient.getToken(
+    integration: String,
+    spaceId: String? = null,
+    cbid: String? = null,
+    audience: String? = null,
+    audienceParams: Map<String, String> = emptyMap(),
+): IntegrationToken? {
     val stored = tokenStore.load() ?: throw AtlasException.NotSignedIn
-    val query = if (spaceId.isNullOrEmpty()) "" else "?space_id=${enc(spaceId)}"
+    val query = integrationQuery(spaceId, cbid, audience, audienceParams)
     val response = try {
         requestRaw(
             "POST",
@@ -94,6 +124,9 @@ suspend fun AtlasClient.getAtlasIdToken(
     accessToken: String,
     origin: String? = null,
     dpopProof: String? = null,
+    cbid: String? = null,
+    audience: String? = null,
+    audienceParams: Map<String, String> = emptyMap(),
 ): AtlasIdIntegrationToken? {
     val headers = LinkedHashMap<String, String>()
     if (dpopProof != null) {
@@ -106,7 +139,8 @@ suspend fun AtlasClient.getAtlasIdToken(
     val response = try {
         requestRaw(
             "POST",
-            "/v1/client/integrations/${enc(integration)}/atlas_id_tokens?publishable_key=${enc(publishableKey)}",
+            "/v1/client/integrations/${enc(integration)}/atlas_id_tokens?publishable_key=${enc(publishableKey)}" +
+                integrationQuery(cbid = cbid, audience = audience, audienceParams = audienceParams).replaceFirst("?", "&"),
             null,
             authenticated = false,
             extraHeaders = headers,

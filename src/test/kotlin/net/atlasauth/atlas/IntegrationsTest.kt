@@ -59,6 +59,17 @@ class IntegrationsTest {
     }
 
     @Test
+    fun getTokenSendsThePerCallAudience() = runTest {
+        server.enqueue(resp(200, """{"jwt":"j","expires_in":60,"integration":"acme","audience":"acme:dv-1"}"""))
+        val token = client().getToken("acme", cbid = "dv 1", audience = "acme:dv-1", audienceParams = mapOf("tenant" to "t2"))!!
+        assertEquals("acme:dv-1", token.audience)
+        assertEquals(
+            "/v1/client/sessions/sess_1/integration_tokens/acme?tenant=t2&cbid=dv%201&audience=acme%3Adv-1",
+            server.takeRequest().path,
+        )
+    }
+
+    @Test
     fun getTokenIsNullWhenTheIntegrationIsNotEnabled() = runTest {
         server.enqueue(resp(404, """{"errors":[{"code":"NOT_FOUND","message":"nope"}]}"""))
         assertNull(client().getToken("chatly"))
