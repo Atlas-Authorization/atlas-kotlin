@@ -135,7 +135,7 @@ class ByMobileTest {
         val first = ByteArray(32) { 7 }
         val firstB64 = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(first)
         var seenRequest = ""
-        val fake = object : PasskeyAuthenticator {
+        val fake = object : PasskeyCeremony {
             override suspend fun createCredential(activity: Context, requestJson: String): String = error("unused")
             override suspend fun getCredential(activity: Context, requestJson: String): String {
                 seenRequest = requestJson

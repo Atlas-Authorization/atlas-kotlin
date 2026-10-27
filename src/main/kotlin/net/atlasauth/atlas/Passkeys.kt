@@ -39,7 +39,7 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 class PasskeyManager(
     private val client: AtlasClient,
-    private val authenticator: PasskeyAuthenticator,
+    private val authenticator: PasskeyCeremony,
 ) {
     /**
      * Register a passkey for the signed-in user (`POST /v1/client/me/passkeys/begin`
@@ -156,7 +156,7 @@ class PasskeyManager(
  * takes the server's WebAuthn options JSON and returns the platform's standard
  * WebAuthn response JSON.
  */
-interface PasskeyAuthenticator {
+interface PasskeyCeremony {
     /** Run a registration ceremony; returns the `registrationResponseJson`. */
     suspend fun createCredential(activity: Context, requestJson: String): String
 
@@ -165,12 +165,12 @@ interface PasskeyAuthenticator {
 }
 
 /**
- * The default [PasskeyAuthenticator], backed by `androidx.credentials`. Maps a
+ * The default [PasskeyCeremony], backed by `androidx.credentials`. Maps a
  * cancellation or platform failure to [AtlasException.Ceremony].
  */
 class CredentialManagerAuthenticator(
     private val credentialManager: CredentialManager,
-) : PasskeyAuthenticator {
+) : PasskeyCeremony {
 
     override suspend fun createCredential(activity: Context, requestJson: String): String {
         val response = try {
