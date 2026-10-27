@@ -8,6 +8,8 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -75,6 +77,14 @@ class AtlasClient(
      * send none.
      */
     var deviceIdProvider: () -> String? = { DeviceId.forProcess() }
+
+    /**
+     * App and device attestation (Play Integrity). When set, sign-up, sign-in and
+     * SMS-send requests fetch a single-use nonce, call this with it (pass it as
+     * the Integrity request `nonce`), and send the proof as `Atlas-Attestation`.
+     * Needed once the instance turns on `attackProtection.appAttestation`.
+     */
+    var attestationProvider: (suspend (nonce: String) -> AtlasAttestationProof)? = null
 
     /**
      * Opens the upstream logout URL [signOut] hands back — the upstream OIDC
@@ -394,6 +404,12 @@ class AtlasClient(
         }
         for ((name, value) in extraHeaders) {
             builder.header(name, value)
+        }
+        val provider = attestationProvider
+        if (provider != null && AtlasAttestation.isGuarded(path, method)) {
+            val challenge = runCatching { sendRaw("POST", "/v1/client/attestation/challenge", "{}", null) }.getOrNull()
+            val nonce = challenge?.takeIf { it.status in 200..299 }?.let { runCatching { json.parseToJsonElement(it.body).jsonObject["nonce"]?.jsonPrimitive?.content }.getOrNull() }
+            if (nonce != null) builder.header("Atlas-Attestation", AtlasAttestation.header(nonce, provider(nonce)))
         }
 
         val requestBody: RequestBody? = when {

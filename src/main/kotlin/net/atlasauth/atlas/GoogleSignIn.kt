@@ -99,7 +99,7 @@ suspend fun AtlasClient.signInWithIdToken(
 /**
  * The seam over the platform Google-ID ceremony — the one Android-only surface of
  * the native-Google flow, injectable so the HTTP half is testable without a
- * device (mirrors [PasskeyAuthenticator]). Returns the resolved OIDC id_token.
+ * device (mirrors [PasskeyCeremony]). Returns the resolved OIDC id_token.
  */
 interface GoogleIdTokenProvider {
     /**

@@ -63,8 +63,11 @@ dependencies {
     // devices that ship it, and the Credential Manager Google-ID provider backs
     // the native "Sign in with Google" / One-Tap id_token flow.
     api(libs.androidx.credentials)
+    // BiometricPrompt for the device-bound sign-in key.
+    api(libs.androidx.biometric)
     implementation(libs.androidx.credentials.play.services.auth)
     api(libs.googleid)
+    implementation(libs.play.integrity)
 
     // Prebuilt Jetpack Compose UI + observable session holder. `api` for the
     // runtime (the public composables + StateFlow are part of the surface); the UI

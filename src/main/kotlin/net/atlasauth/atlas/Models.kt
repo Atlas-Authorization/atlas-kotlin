@@ -97,10 +97,20 @@ data class ExternalAccount(
     @SerialName("connected_at") val connectedAt: Long? = null,
 )
 
+/** The authenticator model behind a passkey, from the FIDO Metadata Service (when `passkeyPolicy.mds` is on). */
+@Serializable
+data class PasskeyAuthenticator(
+    val name: String? = null,
+    /** A `data:image/…` URI. */
+    val icon: String? = null,
+)
+
 @Serializable
 data class Passkey(
     val id: String,
     val name: String? = null,
+    /** Name and icon of the authenticator model, when known. */
+    val authenticator: PasskeyAuthenticator? = null,
 )
 
 /**

@@ -114,7 +114,7 @@ class BxMobileTest {
         assertEquals("cap", body(start).str("captcha_token"))
         assertTrue(flow.awaitingPasskey)
 
-        val fake = object : PasskeyAuthenticator {
+        val fake = object : PasskeyCeremony {
             override suspend fun createCredential(activity: Context, requestJson: String): String =
                 """{"id":"cred","rawId":"cred","type":"public-key","response":{"attestationObject":"att","clientDataJSON":"cdj"}}"""
             override suspend fun getCredential(activity: Context, requestJson: String): String = error("unused")
