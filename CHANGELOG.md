@@ -2,6 +2,12 @@
 
 `net.atlasauth:atlas-android` — the Android-library SDK (source in `sdks/kotlin`).
 
+## 0.13.0 — 2026-11-15
+
+### Added
+
+- `stepUpFactorInfo` returns the label, whether input is needed and the input kind for any step-up factor, with a generic fallback for factors this version does not know yet, so apps render factors without hard-coding each one.
+
 ## 0.12.0 — 2026-11-14
 
 ### Added
