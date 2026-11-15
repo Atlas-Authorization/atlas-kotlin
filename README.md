@@ -493,6 +493,43 @@ atlas.changePassword(currentPassword = "…", newPassword = "…")    // or setP
 Only `unsafe_metadata` is writable from a client (§4.1); `public_metadata` /
 `private_metadata` are backend-only and the server refuses them.
 
+## Organization switcher, billing, API keys and device approval
+
+Client calls (suspend extensions on `AtlasClient`):
+
+```kotlin
+// Organizations: list, create, switch (the new active org is in the session token)
+val orgs = client.listOrganizationMemberships()
+client.setActiveOrganization(orgs.first().organization.id)   // null = personal account
+val active = client.activeOrganizationId()
+
+// Billing: plans, subscription, hosted Checkout and Billing Portal
+val plans = client.billingPlans()
+val checkoutUrl = client.billingCheckout(plans.first().id, successUrl = back, cancelUrl = back)
+val portalUrl = client.billingPortal(returnUrl = back)
+client.billingCancel(); client.billingRestore()
+
+// API keys: list, create (the secret is returned once), rename, revoke
+val created = client.createApiKey(name = "CI", expiresInSeconds = 86_400)
+println(created.secret)
+client.revokeApiKey(created.id)
+
+// Creating a key on a stale session throws STEP_UP_REQUIRED: re-authenticate, then retry
+client.stepUp("password", password = password)
+```
+
+Compose screens, themed from the instance's dashboard design exactly like `AtlasSignIn` (pass `appearance` to override tokens in code):
+
+```kotlin
+AtlasOrganizationSwitcher(client)
+AtlasPricingTable(client, returnUrl = back, onOpenUrl = { openCustomTab(it) })
+AtlasBillingOverview(client, returnUrl = back, onOpenUrl = { openCustomTab(it) })
+AtlasApiKeys(client, onCopy = { clipboard.setText(AnnotatedString(it)) })
+AtlasDeviceApproval(client, userCode = scannedCode)
+```
+
+Each screen is backed by a state holder you can use with your own UI: `OrganizationSwitcherState`, `BillingState`, `ApiKeysState` and `DeviceApprovalState`. Billing hands your `onOpenUrl` the provider's hosted page; there is no in-app card form.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

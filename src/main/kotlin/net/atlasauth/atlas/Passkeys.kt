@@ -103,6 +103,21 @@ class PasskeyManager(
     }
 
     /**
+     * Step up with a passkey: `POST /v1/client/me/step_up/passkey` for the
+     * challenge, Credential Manager `getCredential`, then the assertion to
+     * `POST /v1/client/me/step_up`. The fresh session token is persisted.
+     *
+     * @throws AtlasException.Ceremony if the user cancels or the authenticator fails.
+     */
+    suspend fun stepUpWithPasskey(activity: Context) {
+        val stored = client.tokenStore.load() ?: throw AtlasException.NotSignedIn
+        val beginJson = client.requestRaw("POST", "/v1/client/me/step_up/passkey", "{}", authenticated = true).body
+        val responseJson = authenticator.getCredential(activity, withPrfExtension(beginJson, null, registration = false))
+        val response = client.requestRaw("POST", "/v1/client/me/step_up", stepUpPasskeyBody(beginJson, responseJson), authenticated = true)
+        client.persistStepUp(stored, response.body)
+    }
+
+    /**
      * Create the passkey for a passkey-only sign-up, and with it the account:
      * `sign_ups/:id/passkey/begin` → Credential Manager `createCredential` →
      * `…/finish`. Call once [PasskeySignUpFlow.awaitingPasskey] is true; on

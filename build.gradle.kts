@@ -94,7 +94,7 @@ dependencies {
 // native passkey ceremony via the Jetpack Credential Manager). The dependency-light
 // pure-Kotlin/JVM SDK publishes separately as net.atlasauth:atlas-kotlin (sdks/android).
 group = "net.atlasauth"
-version = "0.11.0"
+version = "0.12.0"
 
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
