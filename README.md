@@ -1,9 +1,9 @@
 # Atlas Android SDK
 
-The official native **Android / Kotlin** SDK for the [Atlas](../../) auth
+The official native **Android / Kotlin** SDK for the [Atlas](https://atlasauth.net) auth
 platform — a dependency-light Android library that speaks the Atlas Frontend API
 (FAPI) with **OkHttp** + **Kotlin coroutines** + **kotlinx.serialization**. It is
-the Android peer of the [Swift SDK](../swift) and mirrors it endpoint-for-endpoint
+the Android peer of the [Swift SDK](https://github.com/Atlas-Authorization/atlas-swift) and mirrors it endpoint-for-endpoint
 and shape-for-shape, which in turn mirrors the vanilla JS client (`@atlas/js`).
 
 > **Complete.** The full client-facing SDK: the auth core, the native passkey
@@ -24,12 +24,12 @@ dependencies {
 }
 ```
 
-Or depend on it locally inside this monorepo:
+Or depend on a local checkout of this repository:
 
 ```kotlin
 // settings.gradle.kts
 include(":atlas-android")
-project(":atlas-android").projectDir = file("../ssoly/sdks/kotlin")
+project(":atlas-android").projectDir = file("../atlas-kotlin")
 ```
 
 - **min SDK 24**, compile SDK 34.
@@ -484,7 +484,7 @@ val revoked: Int = atlas.revokeOtherSessions()                    // every OTHER
 
 // /me mutations
 atlas.updateProfile(firstName = "Ada", unsafeMetadata = mapOf("theme" to JsonValue.Str("dark")))
-atlas.addEmailAddress("ada@new.com")                              // then verifyEmailAddress(id, code)
+atlas.addEmailAddress("ada@example.com")                              // then verifyEmailAddress(id, code)
 atlas.setPrimaryEmailAddress(id = "email_…")
 atlas.connectExternalAccount(provider = "github", redirectUrl = "myapp://cb")  // → authorizationUrl
 atlas.changePassword(currentPassword = "…", newPassword = "…")    // or setPassword("…") for an OAuth-only account
